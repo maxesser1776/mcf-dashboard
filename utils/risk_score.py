@@ -1,158 +1,229 @@
-import pandas as pd
+# utils/risk_score.py
+
 import numpy as np
-from pathlib import Path
+import pandas as pd
 
-# ----------------------------
-# Paths
-# ----------------------------
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data" / "processed"
+from .fetch import load_processed_csv
 
 
-def _zscore(series: pd.Series) -> pd.Series:
-    """Standardize a series to z-scores, safely."""
-    s = series.astype(float)
-    return (s - s.mean()) / (s.std(ddof=0) + 1e-9)
+def _safe_pct_change(series: pd.Series, periods: int = 1) -> pd.Series:
+    """
+    Robust percent-change wrapper:
+    - casts to float
+    - uses fill_method=None to avoid deprecated padding behavior
+    """
+    if series is None:
+        return pd.Series(dtype=float)
+
+    s = pd.to_numeric(series, errors="coerce")
+
+    if not isinstance(s, pd.Series):
+        s = pd.Series(s)
+
+    return s.pct_change(periods=periods, fill_method=None)
 
 
-def _safe_pct_change(series: pd.Series, periods: int = 30) -> pd.Series:
-    return series.astype(float).pct_change(periods=periods)
+def _zscore(series: pd.Series, index=None) -> pd.Series:
+    """
+    Standard z-score with NaN-safe behavior.
 
-
-def _safe_diff(series: pd.Series, periods: int = 30) -> pd.Series:
-    return series.astype(float).diff(periods=periods)
-
-
-def _load_csv(name: str, date_col: str = "record_date") -> pd.DataFrame:
-    path = DATA_DIR / name
-    df = pd.read_csv(path)
-    if date_col in df.columns:
-        df[date_col] = pd.to_datetime(df[date_col])
-        df = df.set_index(date_col).sort_index()
+    Always returns a pandas Series with a well-defined index.
+    If `index` is provided, the result is reindexed to that index and NaNs filled with 0.
+    """
+    if series is None:
+        out = pd.Series(dtype=float)
     else:
-        # fall back to index-based if needed
+        if not isinstance(series, pd.Series):
+            series = pd.Series(series)
+        s = pd.to_numeric(series, errors="coerce")
+        mean = s.mean()
+        std = s.std()
+
+        if std == 0 or np.isnan(std):
+            out = pd.Series(0.0, index=s.index)
+        else:
+            out = (s - mean) / std
+
+    if index is not None:
+        out = out.reindex(index).fillna(0.0)
+    return out
+
+
+def _prepare_index(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make sure each DF is indexed by a datetime-like index called 'Date' if possible.
+    """
+    df = df.copy()
+
+    for col in ["record_date", "Date", "date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col])
+            df = df.set_index(col)
+            df.index.name = "Date"
+            return df.sort_index()
+
+    if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index)
-    return df
+
+    df.index.name = "Date"
+    return df.sort_index()
 
 
 def compute_macro_risk_score() -> pd.DataFrame:
     """
-    Combines Fed plumbing, yield curve, credit spreads, and FX
-    into a normalized 0–100 Macro Risk Score.
+    Compute a 0–100 Macro Risk Score based on:
 
-    Returns a DataFrame indexed by date with:
-      - macro_score         (0–100)
-      - fed_liquidity_score
-      - curve_score
-      - credit_score
-      - fx_score
+    • Fed liquidity (Fed balance sheet, TGA, RRP)
+    • Yield curve (2s10s, 3m10y)
+    • Credit spreads (IG, HY)
+    • FX / USD liquidity (DXY, EM FX basket)
+
+    Returns a DataFrame indexed by Date with columns:
+    - fed_liquidity_score
+    - curve_score
+    - credit_score
+    - fx_score
+    - macro_score
     """
 
-    # ----------------------------
-    # 1) Load all processed data
-    # ----------------------------
-    fed = _load_csv("fed_liquidity.csv")          # Fed_Balance_Sheet, closing_balance(TGA), RRP_Usage
-    yc = _load_csv("yield_curve.csv")             # expect column: "Spread_2s10s" (in bps or %)
-    cs = _load_csv("credit_spreads.csv")          # expect e.g. "IG_OAS", "HY_OAS"
-    fx = _load_csv("fx_liquidity.csv", "Date")    # expect "DXY" and maybe "EM_FX"
+    # -----------------------------
+    # Load processed CSVs
+    # -----------------------------
+    fed = _prepare_index(load_processed_csv("fed_liquidity.csv"))
+    yc = _prepare_index(load_processed_csv("yield_curve.csv"))
+    cs = _prepare_index(load_processed_csv("credit_spreads.csv"))
+    fx = _prepare_index(load_processed_csv("fx_liquidity.csv"))
 
-    # standardize column names a bit (only if they exist)
-    fed_cols = fed.columns.tolist()
-    if "closing_balance" in fed_cols and "TGA_Balance" not in fed_cols:
-        fed = fed.rename(columns={"closing_balance": "TGA_Balance"})
+    # Align on common dates
+    combined_index = fed.index
+    combined_index = combined_index.intersection(yc.index)
+    combined_index = combined_index.intersection(cs.index)
+    combined_index = combined_index.intersection(fx.index)
 
-    # ----------------------------
-    # 2) Build individual factor scores
-    # ----------------------------
+    combined_index = combined_index.sort_values()
 
-    # Fed Liquidity: Fed balance sheet ↑ (good), TGA ↑ (bad), RRP ↑ (bad)
-    # use 30-day changes smoothed over 30 days
-    fed_liq = pd.DataFrame(index=fed.index)
+    if len(combined_index) == 0:
+        # No overlap in dates; return empty frame
+        return pd.DataFrame(
+            columns=[
+                "fed_liquidity_score",
+                "curve_score",
+                "credit_score",
+                "fx_score",
+                "macro_score",
+            ]
+        )
+
+    fed = fed.loc[combined_index]
+    yc = yc.loc[combined_index]
+    cs = cs.loc[combined_index]
+    fx = fx.loc[combined_index]
+
+    # Convenience zeros
+    zeros = pd.Series(0.0, index=combined_index)
+
+    # -----------------------------
+    # Fed Liquidity Score
+    # -----------------------------
+    fed_parts = []
 
     if "Fed_Balance_Sheet" in fed.columns:
-        fed_bs_trend = _safe_pct_change(fed["Fed_Balance_Sheet"], 30).rolling(30).mean()
-        fed_liq["fed_bs_score"] = _zscore(fed_bs_trend)
+        s = fed["Fed_Balance_Sheet"]
+        trend = _safe_pct_change(s, periods=13)
+        fed_parts.append(_zscore(trend, index=combined_index))
 
     if "TGA_Balance" in fed.columns:
-        # rising TGA drains liquidity → negative sign
-        tga_trend = _safe_diff(fed["TGA_Balance"], 30).rolling(30).mean()
-        fed_liq["tga_score"] = -_zscore(tga_trend)
+        s = fed["TGA_Balance"]
+        trend = -_safe_pct_change(s, periods=13)  # high TGA = drain
+        fed_parts.append(_zscore(trend, index=combined_index))
 
     if "RRP_Usage" in fed.columns:
-        # rising RRP → cash parked at Fed → risk-off
-        rrp_trend = _safe_diff(fed["RRP_Usage"], 30).rolling(30).mean()
-        fed_liq["rrp_score"] = -_zscore(rrp_trend)
+        s = fed["RRP_Usage"]
+        trend = -_safe_pct_change(s, periods=13)  # high RRP = drain
+        fed_parts.append(_zscore(trend, index=combined_index))
 
-    # Aggregate Fed liquidity score (mean of available components)
-    fed_liq["fed_liquidity_score"] = fed_liq.mean(axis=1)
+    if fed_parts:
+        fed_liquidity_z = sum(fed_parts) / len(fed_parts)
+    else:
+        fed_liquidity_z = zeros.copy()
 
-    # Yield Curve: steeper (more positive) = risk-on
-    curve = pd.DataFrame(index=yc.index)
+    # -----------------------------
+    # Yield Curve Score
+    # -----------------------------
+    curve_parts = []
+
     if "Spread_2s10s" in yc.columns:
-        curve["curve_score"] = _zscore(yc["Spread_2s10s"].astype(float))
-    elif "spread_2s10s" in yc.columns:
-        curve["curve_score"] = _zscore(yc["spread_2s10s"].astype(float))
+        curve_parts.append(_zscore(yc["Spread_2s10s"], index=combined_index))
 
-    # Credit Spreads: tightening = risk-on, widening = risk-off
-    credit = pd.DataFrame(index=cs.index)
-    hy_col = None
+    if "Spread_3m10y" in yc.columns:
+        curve_parts.append(_zscore(yc["Spread_3m10y"], index=combined_index))
+
+    if curve_parts:
+        curve_z = sum(curve_parts) / len(curve_parts)
+    else:
+        curve_z = zeros.copy()
+
+    # -----------------------------
+    # Credit Stress Score
+    # -----------------------------
+    credit_parts = []
+
+    if "IG_OAS" in cs.columns:
+        credit_parts.append(_zscore(cs["IG_OAS"], index=combined_index))
+
     if "HY_OAS" in cs.columns:
-        hy_col = "HY_OAS"
-    elif "hy_oas" in cs.columns:
-        hy_col = "hy_oas"
+        credit_parts.append(_zscore(cs["HY_OAS"], index=combined_index))
 
-    if hy_col:
-        # rising HY spreads = risk-off → negative sign
-        hy_trend = _safe_diff(cs[hy_col], 30).rolling(30).mean()
-        credit["credit_score"] = -_zscore(hy_trend)
+    if credit_parts:
+        credit_stress_z = -sum(credit_parts) / len(credit_parts)
+    else:
+        credit_stress_z = zeros.copy()
 
-    # FX / Dollar: strong USD = risk-off
-    fx_df = pd.DataFrame(index=fx.index)
+    # -----------------------------
+    # FX / USD Liquidity Score
+    # -----------------------------
+    fx_parts_pos = []
+    fx_parts_neg = []
+
+    # Strong dollar = risk-off -> negative contribution
     if "DXY" in fx.columns:
-        dxy_trend = _safe_diff(fx["DXY"], 30).rolling(30).mean()
-        fx_df["fx_score"] = -_zscore(dxy_trend)
+        fx_parts_neg.append(_zscore(fx["DXY"], index=combined_index))
 
-    # ----------------------------
-    # 3) Align all scores on common date index
-    # ----------------------------
-    combined = pd.concat(
-        [
-            fed_liq[["fed_liquidity_score"]],
-            curve.get("curve_score"),
-            credit.get("credit_score"),
-            fx_df.get("fx_score"),
-        ],
-        axis=1,
-        join="inner",
-    ).dropna()
+    # Strong EM FX basket = risk-on -> positive contribution
+    if "EM_FX_Basket" in fx.columns:
+        fx_parts_pos.append(_zscore(fx["EM_FX_Basket"], index=combined_index))
 
-    # fill any remaining gaps with forward-fill to keep it smooth
-    combined = combined.ffill()
+    if fx_parts_pos or fx_parts_neg:
+        pos = sum(fx_parts_pos) / max(len(fx_parts_pos), 1)
+        neg = sum(fx_parts_neg) / max(len(fx_parts_neg), 1)
+        fx_liquidity_z = pos - neg
+    else:
+        fx_liquidity_z = zeros.copy()
 
-    # ----------------------------
-    # 4) Combine into single Macro Risk Score (0–100)
-    # ----------------------------
-    # You can tweak these weights later
-    weights = {
-        "fed_liquidity_score": 0.30,
-        "curve_score": 0.20,
-        "credit_score": 0.25,
-        "fx_score": 0.25,
-    }
+    # -----------------------------
+    # Combine into Macro Score
+    # -----------------------------
+    combined_z = (
+        fed_liquidity_z
+        + curve_z
+        + credit_stress_z
+        + fx_liquidity_z
+    ) / 4.0
 
-    # weighted sum of z-scores
-    weighted = 0
-    for col, w in weights.items():
-        if col in combined.columns:
-            weighted = weighted + w * combined[col]
+    macro_score = 50 + 15 * combined_z
+    macro_score = macro_score.clip(lower=0, upper=100)
+    macro_score = macro_score.fillna(50.0)  # neutral fallback if anything slipped through
 
-    # compress extreme z-scores
-    weighted = weighted.clip(-3, 3)
+    out = pd.DataFrame(
+        {
+            "fed_liquidity_score": fed_liquidity_z,
+            "curve_score": curve_z,
+            "credit_score": credit_stress_z,
+            "fx_score": fx_liquidity_z,
+            "macro_score": macro_score,
+        },
+        index=combined_index,
+    )
 
-    # map z-score-ish range [-3, 3] → [20, 80] then clip 0–100
-    macro_score = 50 + (weighted * 10)
-    macro_score = macro_score.clip(0, 100)
-
-    combined["macro_score"] = macro_score
-
-    return combined
+    out.index.name = "Date"
+    return out.sort_index()
