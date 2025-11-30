@@ -1,0 +1,6 @@
+fiscaldataapi
+yfinance
+requests
+pandas
+streamlit
+plotly

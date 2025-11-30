@@ -1,0 +1,23 @@
+# Environment & Python cache
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Jupyter/IPython artifacts
+.ipynb_checkpoints/
+
+# Streamlit config
+.streamlit/
+
+# Sensitive files
+.env
+
+# Data files
+/data/raw/
+/data/processed/*.csv
+
+# OS/IDE specific
+.DS_Store
+.vscode/
+.idea/
