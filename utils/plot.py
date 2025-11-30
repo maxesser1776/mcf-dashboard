@@ -35,4 +35,6 @@ def single_line_plot(df, x, y, title="", y_label=""):
         xaxis_title="Date",
         yaxis_title=y_label or y,
         height=400,
-        margin=dict(l=40, r=)
+        margin=dict(l=40, r=40, t=40, b=40)
+    )
+    return fig
