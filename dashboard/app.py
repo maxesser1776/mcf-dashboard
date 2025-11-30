@@ -16,18 +16,19 @@
 # │ └── fetch.py # Requests, BeautifulSoup utilities
 # └── requirements.txt # Python dependencies
 
-# Initial app.py using Streamlit
+# 🐍 Initial app.py using Streamlit
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import streamlit as st
-import pandas as pd
+
 from utils.fetch import load_processed_csv
 from utils.plot import single_line_plot, dual_axis_plot
-import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
-st.title("Macro Capital Flow Dashboard")
+st.title("🫡 Macro Capital Flow Dashboard")
 
 st.sidebar.header("Select Dashboard Section")
 section = st.sidebar.radio("Section", [
