@@ -22,7 +22,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if root_path not in sys.path:
+    sys.path.insert(0, root_path)
 
 from utils.fetch import load_processed_csv
 from utils.plot import single_line_plot, dual_axis_plot
