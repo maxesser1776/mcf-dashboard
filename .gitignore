@@ -13,9 +13,6 @@ __pycache__/
 # Sensitive files
 .env
 
-# Data files
-/data/raw/
-/data/processed/*.csv
 
 # OS/IDE specific
 .DS_Store
