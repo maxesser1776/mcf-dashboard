@@ -4,7 +4,7 @@ from datetime import datetime
 
 # --- 1. Fetch DXY (US Dollar Index)
 def fetch_dxy():
-    dxy = yf.download("DX-Y.NYB", start="2015-01-01")
+    dxy = yf.download("UUP", start="2015-01-01")
     df = dxy[["Adj Close"]].rename(columns={"Adj Close": "DXY"})
     df.index = pd.to_datetime(df.index)
     return df

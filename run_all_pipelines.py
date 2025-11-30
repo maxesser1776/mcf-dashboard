@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 scripts = [
     "pipelines/fed_plumbing.py",
@@ -12,7 +13,7 @@ print("\n🔄 Running all pipeline scripts...\n")
 
 for script in scripts:
     print(f"▶ Running {script}...")
-    result = subprocess.run(["python", script], capture_output=True, text=True)
+    result = subprocess.run(["sys.executable, script], capture_output=True, text=True)
     if result.returncode == 0:
         print(f"✅ {script} completed successfully.\n")
     else:
