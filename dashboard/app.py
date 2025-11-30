@@ -45,7 +45,7 @@ section = st.sidebar.radio("Section", [
 if section == "Fed Liquidity & Plumbing":
     st.subheader("Federal Reserve Plumbing")
     data = load_processed_csv("fed_liquidity.csv")
-    st.plotly_chart(dual_axis_plot(data.reset_index(), "index", "Fed_Balance_Sheet", "TGA_Balance", title="Fed Balance Sheet & TGA", y1_label="Assets (USD B)", y2_label="TGA (USD B)"))
+    st.plotly_chart(dual_axis_plot(data.reset_index(), "index", "Fed_Balance_Sheet", "closing_balance", title="Fed Balance Sheet & TGA", y1_label="Assets (USD B)", y2_label="TGA (USD B)"))
     st.plotly_chart(single_line_plot(data.reset_index(), "index", "RRP_Usage", title="Reverse Repo (RRP) Usage", y_label="USD B"))
 
 elif section == "Yield Curve & Policy":
