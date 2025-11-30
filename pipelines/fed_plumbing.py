@@ -3,6 +3,8 @@ import requests
 from fredapi import Fred
 import os
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from utils.fred import get_fred_connection
 fred = get_fred_connection()
 

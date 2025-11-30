@@ -2,6 +2,8 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 # --- 1. Fetch DXY (US Dollar Index)
 def fetch_dxy():
     dxy = yf.download("UUP", start="2015-01-01")
