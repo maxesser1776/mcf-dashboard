@@ -1,8 +1,11 @@
 import pandas as pd
 from fredapi import Fred
+import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from utils.fred import get_fred_connection
 fred = get_fred_connection()
@@ -31,5 +34,9 @@ def fetch_credit_spreads():
 
 if __name__ == "__main__":
     data = fetch_credit_spreads()
-    data.to_csv("../data/processed/credit_spreads.csv")
-    print("Credit spread data updated.")
+    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "processed"))
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_path = os.path.join(output_dir, "credit_spreads.csv")
+    data.to_csv(output_path)
+    print(f"Credit spread data saved to: {output_path}.")

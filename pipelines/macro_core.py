@@ -1,10 +1,13 @@
 import pandas as pd
-from fredapi import Fred
+import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from utils.fred import get_fred_connection
+
 fred = get_fred_connection()
 
 # --- 1. Inflation: CPI, Core CPI, Core PCE
@@ -34,5 +37,9 @@ def fetch_macro_core():
 
 if __name__ == "__main__":
     data = fetch_macro_core()
-    data.to_csv("../data/processed/macro_core.csv")
-    print("Macro core data updated.")
+    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "processed"))
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_path = os.path.join(output_dir, "macro_core.csv")
+    data.to_csv(output_path)
+    print(f"Macro core data save to: {output_path}")

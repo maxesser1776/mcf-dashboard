@@ -1,8 +1,11 @@
 import pandas as pd
 from fredapi import Fred
+import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from utils.fred import get_fred_connection
 fred = get_fred_connection()
@@ -37,5 +40,9 @@ def fetch_yield_policy_data():
 
 if __name__ == "__main__":
     data = fetch_yield_policy_data()
-    data.to_csv("../data/processed/yield_curve.csv")
-    print("Yield curve and SOFR data updated.")
+    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "processed"))
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_path = os.path.join(output_dir, "yield_curve.csv")
+    data.to_csv(output_path)
+    print(f"Yield curve and SRF data save to: {output_path}.")
