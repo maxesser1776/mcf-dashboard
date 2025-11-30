@@ -17,6 +17,9 @@
 # └── requirements.txt # Python dependencies
 
 # Initial app.py using Streamlit
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 from utils.fetch import load_processed_csv
