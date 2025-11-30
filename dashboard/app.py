@@ -64,7 +64,7 @@ elif section == "Credit Market Signals":
 elif section == "FX & Global Stress":
     st.subheader("Dollar Liquidity & FX")
     data = load_processed_csv("fx_liquidity.csv")
-    st.plotly_chart(single_line_plot(data.reset_index(), "index", "DXY", title="US Dollar Index (DXY)", y_label="Index"))
+    st.plotly_chart(single_line_plot(data.reset_index(), "Date", "DXY", title="US Dollar Index (DXY)", y_label="Index"))
     for col in ["USD/TRY", "USD/ZAR", "USD/CLP"]:
         if col in data.columns:
             st.plotly_chart(single_line_plot(data.reset_index(), "index", col, title=f"{col} Exchange Rate", y_label="Rate"))

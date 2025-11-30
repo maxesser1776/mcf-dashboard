@@ -1,0 +1,11 @@
+record_date,account_type,close_today_bal,open_today_bal,open_month_bal,open_fiscal_year_bal,table_nbr,table_nm,sub_table_name,src_line_nbr,record_fiscal_year,record_fiscal_quarter,record_calendar_year,record_calendar_quarter,record_calendar_month,record_calendar_day
+2020-06-24,Short-Term Cash Investments (Table V),0.0,0,0,0,I,Operating Cash Balance,Type of account,3,2020,3,2020,2,6,24
+2020-06-23,Federal Reserve Account,1612877.0,1626909,1449129,382483,I,Operating Cash Balance,Type of account,1,2020,3,2020,2,6,23
+2020-06-23,Supplementary Financing Program Account,0.0,0,0,0,I,Operating Cash Balance,Type of account,2,2020,3,2020,2,6,23
+2020-06-23,Short-Term Cash Investments (Table V),0.0,0,0,0,I,Operating Cash Balance,Type of account,3,2020,3,2020,2,6,23
+2020-06-22,Federal Reserve Account,1626909.0,1635527,1449129,382483,I,Operating Cash Balance,Type of account,1,2020,3,2020,2,6,22
+2020-06-22,Supplementary Financing Program Account,0.0,0,0,0,I,Operating Cash Balance,Type of account,2,2020,3,2020,2,6,22
+2020-06-22,Short-Term Cash Investments (Table V),0.0,0,0,0,I,Operating Cash Balance,Type of account,3,2020,3,2020,2,6,22
+2020-06-19,Federal Reserve Account,1635527.0,1634655,1449129,382483,I,Operating Cash Balance,Type of account,1,2020,3,2020,2,6,19
+2020-06-19,Supplementary Financing Program Account,0.0,0,0,0,I,Operating Cash Balance,Type of account,2,2020,3,2020,2,6,19
+2020-06-19,Short-Term Cash Investments (Table V),0.0,0,0,0,I,Operating Cash Balance,Type of account,3,2020,3,2020,2,6,19
