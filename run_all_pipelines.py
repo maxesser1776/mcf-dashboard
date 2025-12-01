@@ -21,6 +21,7 @@ PIPELINE_SCRIPTS = [
     "pipelines/fx_liquidity.py",
     "pipelines/macro_core.py",
     "pipelines/funding_stress.py"
+    "pipelines/volatility_regimes.py"
 ]
 
 
