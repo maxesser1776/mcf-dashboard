@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -214,33 +214,41 @@ def _compute_funding_score() -> pd.Series:
 
 
 # ---------------------------------------------------------
-# Volatility Score (VIX + term structure)
+# Volatility Score (VIX + term structure + MOVE)
 # ---------------------------------------------------------
 def _compute_volatility_score() -> pd.Series:
     """
-    Convert VIX level + term structure into a 0–100 'volatility regime' score.
+    Convert VIX level + term structure + MOVE Index into a 0–100 'volatility regime' score.
 
-    - High VIX and inverted term structure -> low score (risk-off)
-    - Low VIX and contango term structure -> higher score (risk-on)
+    - High VIX, inverted term structure, and high MOVE -> low score (risk-off)
+    - Low VIX, contango term structure, and low MOVE  -> higher score (risk-on)
     """
     df = _load_processed_csv("volatility_regimes.csv")
 
     # Prefer smoothed series if available
     vix = df.get("VIX_Short_SMA5", df.get("VIX_Short"))
     term = df.get("VIX_Term_Ratio_SMA5", df.get("VIX_Term_Ratio"))
+    move = df.get("MOVE_SMA20", df.get("MOVE_Index"))
 
-    if vix is None and term is None:
+    if vix is None and term is None and move is None:
         return pd.Series(np.nan, index=df.index)
 
-    # Compute simple z-scores
     components = []
 
+    # VIX: high => stress => lower score
     if vix is not None and vix.std() > 0:
         z_vix = (vix - vix.mean()) / vix.std()
-        components.append(-z_vix)  # high VIX => more stress => lower score
+        components.append(-z_vix)
+
+    # Term structure: high ratio (front > 3M) => backwardation => stress
     if term is not None and term.std() > 0:
         z_term = (term - term.mean()) / term.std()
-        components.append(-z_term)  # high term ratio (backwardation) => stress
+        components.append(-z_term)
+
+    # MOVE: high Treasury vol => stress
+    if move is not None and move.std() > 0:
+        z_move = (move - move.mean()) / move.std()
+        components.append(-z_move)
 
     if not components:
         return pd.Series(np.nan, index=df.index)
@@ -265,7 +273,6 @@ def compute_macro_risk_score() -> pd.DataFrame:
       - volatility_score
       - macro_score
     """
-    # Compute individual scores
     fed_liq = _compute_fed_liquidity_score()
     curve = _compute_yield_curve_score()
     credit = _compute_credit_score()
@@ -273,7 +280,7 @@ def compute_macro_risk_score() -> pd.DataFrame:
     funding = _compute_funding_score()
     vol = _compute_volatility_score()
 
-    # Build a common index (outer join on dates)
+    # Common index
     all_index = fed_liq.index.union(curve.index)
     all_index = all_index.union(credit.index)
     all_index = all_index.union(fx.index)
@@ -288,10 +295,9 @@ def compute_macro_risk_score() -> pd.DataFrame:
     scores["funding_score"] = funding.reindex(all_index)
     scores["volatility_score"] = vol.reindex(all_index)
 
-    # Forward-fill to avoid gaps where higher-frequency data leads
+    # Fill forward
     scores = scores.sort_index().ffill()
 
-    # Weights for each component (tune to taste)
     weights: Dict[str, float] = {
         "fed_liquidity_score": 0.25,
         "curve_score": 0.20,
@@ -301,7 +307,6 @@ def compute_macro_risk_score() -> pd.DataFrame:
         "volatility_score": 0.10,
     }
 
-    # Use only available columns for each row
     weight_series = pd.Series(weights)
 
     macro_scores = []
@@ -311,7 +316,6 @@ def compute_macro_risk_score() -> pd.DataFrame:
             macro_scores.append(np.nan)
             continue
 
-        # Filter weights to valid components
         w = weight_series.loc[valid.index]
         w = w / w.sum()
         macro_scores.append((valid * w).sum())

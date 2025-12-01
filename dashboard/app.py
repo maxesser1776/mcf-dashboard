@@ -560,9 +560,9 @@ elif section == "Growth & Inflation":
 elif section == "Volatility & Market Stress":
     st.header("Volatility & Market Stress")
     st.caption(
-        "This page tracks implied equity volatility and the shape of the VIX curve. "
-        "Front-end VIX spikes and curve inversion (front > back) are classic signs of "
-        "short-term market stress. Data comes from CBOE VIX indices via Yahoo Finance "
+        "This page tracks implied equity volatility (VIX), the shape of the VIX curve, and Treasury rate volatility "
+        "(MOVE Index). Front-end VIX spikes, curve inversion (front > 3M), and high MOVE levels are classic signs of "
+        "short-term market stress. Data comes from CBOE VIX indices and the ICE BofAML MOVE Index via Yahoo Finance "
         "and updates on each trading day."
     )
 
@@ -575,6 +575,7 @@ elif section == "Volatility & Market Stress":
     date_col = _get_date_column(vol)
     vol[date_col] = pd.to_datetime(vol[date_col])
 
+    # VIX front-month
     if "VIX_Short" in vol.columns:
         st.subheader("Front-Month VIX")
         fig_vix = single_line_plot(
@@ -593,6 +594,7 @@ elif section == "Volatility & Market Stress":
     else:
         st.info("VIX_Short column missing in volatility_regimes.csv")
 
+    # VIX term structure
     if "VIX_Term_Ratio" in vol.columns:
         st.subheader("VIX Term Structure (Front / 3M)")
         fig_term = single_line_plot(
@@ -610,3 +612,22 @@ elif section == "Volatility & Market Stress":
         )
     else:
         st.info("VIX_Term_Ratio column missing in volatility_regimes.csv")
+
+    # MOVE Index
+    if "MOVE_Index" in vol.columns:
+        st.subheader("MOVE Index (Treasury Volatility)")
+        fig_move = single_line_plot(
+            vol,
+            x=date_col,
+            y="MOVE_Index",
+            title="ICE BofAML MOVE Index",
+            y_label="Index Level",
+        )
+        st.plotly_chart(fig_move, width="stretch")
+        st.caption(
+            "The MOVE Index measures implied volatility in US Treasury markets. "
+            "Elevated or spiking MOVE levels often coincide with rate shocks, bond market stress, "
+            "and tightening financial conditions. Like VIX, this series is pulled daily from Yahoo Finance."
+        )
+    else:
+        st.info("MOVE_Index column missing in volatility_regimes.csv")
