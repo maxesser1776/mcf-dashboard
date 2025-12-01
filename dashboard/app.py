@@ -6,7 +6,9 @@ import traceback
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+import yfinance as yf
 
 # ---------------------------------------------------------
 # Ensure project root is on sys.path so `utils.*` imports work
@@ -17,7 +19,7 @@ if PROJECT_ROOT not in sys.path:
 
 from utils.fetch import load_processed_csv
 from utils.plot import single_line_plot, dual_axis_plot
-from utils.risk_score import compute_macro_risk_score
+from utils.risk_score import compute_macro_risk_score, _scale_to_0_100
 
 
 # ---------------------------------------------------------
@@ -122,7 +124,7 @@ try:
         if isinstance(hist.index, pd.DatetimeIndex):
             x_vals = hist.index
         else:
-            x_vals = pd.to_datetime(hist.index, errors='coerce')
+            x_vals = pd.to_datetime(hist.index, errors="coerce")
 
         fig_hist = go.Figure(
             data=[go.Scatter(x=x_vals, y=hist["macro_score"], mode="lines", line=dict(width=2))]
@@ -140,13 +142,20 @@ try:
         # Crisis shading
         shapes = []
         for name, x0, x1 in crisis_windows:
-            shapes.append(dict(
-                type="rect",
-                xref="x",
-                yref="paper",
-                x0=x0, x1=x1, y0=0, y1=1,
-                fillcolor="#ff7f0e", opacity=0.12, line_width=0,
-            ))
+            shapes.append(
+                dict(
+                    type="rect",
+                    xref="x",
+                    yref="paper",
+                    x0=x0,
+                    x1=x1,
+                    y0=0,
+                    y1=1,
+                    fillcolor="#ff7f0e",
+                    opacity=0.12,
+                    line_width=0,
+                )
+            )
 
         fig_hist.update_layout(
             shapes=shapes,
@@ -161,8 +170,7 @@ try:
         for name, x0, x1 in crisis_windows:
             mid = pd.to_datetime(x0) + (pd.to_datetime(x1) - pd.to_datetime(x0)) / 2
             fig_hist.add_annotation(
-                x=mid, y=98, text=name,
-                showarrow=False, yanchor="top", font=dict(size=9)
+                x=mid, y=98, text=name, showarrow=False, yanchor="top", font=dict(size=9)
             )
 
         st.plotly_chart(fig_hist, use_container_width=True)
@@ -175,7 +183,6 @@ except Exception as e:
     st.warning(f"Macro score section failed: {e}")
 
 st.markdown("---")  # THIS MUST BE OUTSIDE try/except!
-
 
 
 # ---------------------------------------------------------
@@ -193,11 +200,13 @@ section = st.sidebar.radio(
         "Growth & Inflation",
         "Leading Growth Signals",
         "Volatility & Market Stress",
+        "Model Diagnostics",
+        "Historical Accuracy",
     ],
 )
 
 st.sidebar.markdown(
-    "v0.3 – Macro Capital Flows Dashboard. "
+    "v0.4 – Macro Capital Flows Dashboard. "
     "Run the pipelines or scheduled job to refresh data."
 )
 
@@ -726,3 +735,315 @@ elif section == "Volatility & Market Stress":
         )
     else:
         st.info("MOVE_Index column missing in volatility_regimes.csv")
+
+
+# ---------------------------------------------------------
+# 9. Model Diagnostics (scaling debug etc.)
+# ---------------------------------------------------------
+elif section == "Model Diagnostics":
+    st.header("Model Diagnostics")
+    st.caption(
+        "Tools to sanity check component scores, scaling behavior, and how much the macro score is relying on each factor."
+    )
+
+    try:
+        scores = compute_macro_risk_score().sort_index()
+    except Exception as e:
+        st.error(f"Failed to compute macro scores for diagnostics: {e}")
+        st.stop()
+
+    if scores.empty:
+        st.info("Macro score history empty — run pipelines to update data.")
+        st.stop()
+
+    # Component snapshot
+    st.subheader("Latest Component Snapshot")
+    latest_row = scores.iloc[-1]
+    comp_cols = [c for c in scores.columns if c.endswith("_score")]
+    snapshot = latest_row[comp_cols + ["macro_score"]].to_frame("Latest Score").round(1)
+    st.dataframe(snapshot, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("Factor Normalization Debug")
+
+    factor_options = comp_cols + ["macro_score"]
+    factor = st.selectbox("Select factor / macro score to inspect", factor_options, index=0)
+
+    series = scores[factor].copy()
+    series = series.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if series.empty:
+        st.info("Selected series is empty after cleaning; pick another factor.")
+        st.stop()
+
+    window = st.slider("Rolling window (days)", min_value=63, max_value=504, value=252, step=21)
+
+    # Full-history scaling using the same helper as in utils.risk_score
+    full_scaled = _scale_to_0_100(series)
+
+    # Rolling min/max scaling to 0–100
+    roll_min = series.rolling(window).min()
+    roll_max = series.rolling(window).max()
+
+    denom = (roll_max - roll_min).replace(0, np.nan)
+    rolling_scaled = (series - roll_min) / denom * 100.0
+    # Where denom was 0 or NaN, center at 50
+    rolling_scaled = rolling_scaled.fillna(50.0)
+
+    dbg = pd.DataFrame(
+        {
+            "raw": series,
+            "full_scaled": full_scaled.reindex(series.index),
+            "rolling_scaled": rolling_scaled,
+        }
+    )
+
+    # Plot
+    fig_dbg = go.Figure()
+    fig_dbg.add_trace(
+        go.Scatter(
+            x=dbg.index,
+            y=dbg["raw"],
+            mode="lines",
+            name="Raw",
+            yaxis="y1",
+        )
+    )
+    fig_dbg.add_trace(
+        go.Scatter(
+            x=dbg.index,
+            y=dbg["full_scaled"],
+            mode="lines",
+            name="Full-history 0–100",
+            yaxis="y2",
+        )
+    )
+    fig_dbg.add_trace(
+        go.Scatter(
+            x=dbg.index,
+            y=dbg["rolling_scaled"],
+            mode="lines",
+            name=f"Rolling {window}d 0–100",
+            yaxis="y2",
+            line=dict(dash="dash"),
+        )
+    )
+
+    fig_dbg.update_layout(
+        height=350,
+        margin=dict(l=40, r=40, t=40, b=40),
+        yaxis=dict(title="Raw", side="left"),
+        yaxis2=dict(title="Scaled (0–100)", overlaying="y", side="right", range=[0, 100]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        title=f"{factor} — Raw vs Full vs Rolling Scaling",
+    )
+
+    st.plotly_chart(fig_dbg, use_container_width=True)
+
+    # Simple stats table
+    st.markdown("#### Scaling Stats")
+    stats = dbg[["full_scaled", "rolling_scaled"]].describe().T.round(2)
+    st.dataframe(stats, use_container_width=True)
+
+
+# ---------------------------------------------------------
+# 10. Historical Accuracy Panel
+# ---------------------------------------------------------
+elif section == "Historical Accuracy":
+    st.header("Historical Accuracy")
+    st.caption(
+        "How well did each macro regime historically predict asset performance? "
+        "Forward returns are computed over each historical regime condition."
+    )
+
+    try:
+        scores = compute_macro_risk_score().sort_index()
+    except Exception as e:
+        st.error(f"Failed to compute macro scores for accuracy panel: {e}")
+        st.stop()
+
+    if not isinstance(scores.index, pd.DatetimeIndex):
+        scores.index = pd.to_datetime(scores.index, errors="coerce")
+
+    scores = scores.dropna(subset=["macro_score"]).sort_index()
+
+    if scores.empty:
+        st.info("Macro score history empty — cannot compute historical accuracy.")
+        st.stop()
+
+    def classify_regime(x: float) -> str:
+        if x >= 60:
+            return "Risk-On"
+        elif x <= 40:
+            return "Risk-Off"
+        else:
+            return "Mixed"
+
+    scores["Regime"] = scores["macro_score"].apply(classify_regime)
+
+    tickers = {
+        "SPY": "US Equities",
+        "TLT": "Long Treasuries",
+        "GLD": "Gold",
+        "UUP": "US Dollar",
+        "HYG": "High Yield Credit",
+        "EEM": "Emerging Markets",
+    }
+
+    st.markdown("### Assets to Evaluate")
+    selected = st.multiselect(
+        "Select assets",
+        list(tickers.keys()),
+        default=["SPY", "TLT", "GLD", "UUP"],
+    )
+
+    look_aheads = [30, 90, 180]
+    start = scores.index.min()
+    end = scores.index.max()
+
+    if not selected:
+        st.info("Select at least one asset to evaluate.")
+        st.stop()
+
+    # Robust yfinance handling
+    raw = yf.download(selected, start=start, end=end, auto_adjust=True)
+
+    if raw.empty:
+        st.info("No price data returned from yfinance for the selected assets and date range.")
+        st.stop()
+
+    # Extract closing prices robustly
+    if isinstance(raw.columns, pd.MultiIndex):
+        data = None
+
+        # Pattern 1: level 0 = price field, level 1 = ticker
+        if "Close" in raw.columns.get_level_values(0):
+            try:
+                data = raw["Close"].copy()
+            except Exception:
+                data = None
+
+        # Pattern 2: level 1 = price field, level 0 = ticker
+        if data is None and "Close" in raw.columns.get_level_values(1):
+            try:
+                data = raw.xs("Close", axis=1, level=1)
+            except Exception:
+                data = None
+
+        # Fallback to Adj Close if needed
+        if data is None and "Adj Close" in raw.columns.get_level_values(0):
+            try:
+                data = raw["Adj Close"].copy()
+            except Exception:
+                data = None
+
+        if data is None and "Adj Close" in raw.columns.get_level_values(1):
+            try:
+                data = raw.xs("Adj Close", axis=1, level=1)
+            except Exception:
+                data = None
+
+        if data is None:
+            raise ValueError(
+                f"Downloaded data has MultiIndex columns but no usable 'Close' or 'Adj Close' field. "
+                f"Columns: {raw.columns}"
+            )
+
+    else:
+        data = None
+        for candidate in ["Adj Close", "Close"]:
+            if candidate in raw.columns:
+                data = raw[[candidate]].copy()
+                # If only one ticker, rename column to ticker for consistency
+                if len(selected) == 1:
+                    data.columns = [selected[0]]
+                break
+
+        if data is None:
+            # Assume columns already correspond to tickers
+            data = raw.copy()
+
+    data = data.dropna(how="all")
+
+    # Make sure columns are exactly the selected tickers if possible
+    missing_cols = [t for t in selected if t not in data.columns]
+    if missing_cols:
+        st.warning(f"No usable price series for: {', '.join(missing_cols)}. They will be skipped.")
+        selected = [t for t in selected if t in data.columns]
+
+    if not selected:
+        st.info("No valid assets left after cleaning; cannot compute accuracy.")
+        st.stop()
+
+    # Align market data to scores index
+    data = data.reindex(scores.index, method="ffill")
+
+    results = []
+    for regime in ["Risk-On", "Mixed", "Risk-Off"]:
+        mask = scores["Regime"] == regime
+        dates = scores.index[mask]
+
+        for ticker in selected:
+            for days in look_aheads:
+                fwd = []
+                dd = []
+                for d in dates:
+                    end_date = d + pd.Timedelta(days=days)
+                    if end_date not in data.index:
+                        continue
+                    start_px = data.loc[d, ticker]
+                    end_px = data.loc[end_date, ticker]
+                    if pd.isna(start_px) or pd.isna(end_px):
+                        continue
+
+                    ret = (end_px - start_px) / start_px * 100.0
+                    fwd.append(ret)
+
+                    window_prices = data.loc[d:end_date, ticker]
+                    if window_prices.empty or pd.isna(window_prices).all():
+                        continue
+                    ddn = (window_prices.min() - start_px) / start_px * 100.0
+                    dd.append(ddn)
+
+                if not fwd:
+                    continue
+
+                results.append(
+                    {
+                        "Regime": regime,
+                        "Asset": ticker,
+                        "Forward": f"{days}d",
+                        "Avg Return %": float(np.mean(fwd)),
+                        "Win Rate %": float(100 * (np.sum(np.array(fwd) > 0) / len(fwd))),
+                        "Avg Max Drawdown %": float(np.mean(dd)) if dd else np.nan,
+                    }
+                )
+
+    if not results:
+        st.info("Not enough overlapping history between macro regimes and asset data to compute stats.")
+        st.stop()
+
+    res_df = pd.DataFrame(results)
+
+    st.markdown("### Summary Table")
+    pivot = (
+        res_df.pivot(index=["Regime", "Asset"], columns="Forward")[
+            ["Avg Return %", "Win Rate %", "Avg Max Drawdown %"]
+        ]
+        .round(2)
+        .sort_index()
+    )
+    st.dataframe(pivot, use_container_width=True)
+
+    st.markdown("### Quick Insights")
+    for regime in ["Risk-On", "Mixed", "Risk-Off"]:
+        subset = res_df[res_df["Regime"] == regime]
+        if subset.empty:
+            continue
+        best = subset.nlargest(1, "Avg Return %").iloc[0]
+        worst = subset.nsmallest(1, "Avg Return %").iloc[0]
+        st.write(
+            f"**{regime}:** "
+            f"Best = {best['Asset']} ({best['Avg Return %']:+.2f}% over {best['Forward']}) — "
+            f"Worst = {worst['Asset']} ({worst['Avg Return %']:+.2f}% over {worst['Forward']})"
+        )

@@ -6,3 +6,4 @@ pandas
 streamlit
 plotly
 dotenv 
+numpy
