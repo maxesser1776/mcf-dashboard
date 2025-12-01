@@ -77,9 +77,9 @@ def _compute_fed_liquidity_score() -> pd.Series:
     if fed is not None:
         components.append((fed - fed.mean()) / fed.std())
     if tga is not None:
-        components.append(- (tga - tga.mean()) / tga.std())
+        components.append(-(tga - tga.mean()) / tga.std())
     if rrp is not None:
-        components.append(- (rrp - rrp.mean()) / rrp.std())
+        components.append(-(rrp - rrp.mean()) / rrp.std())
 
     if not components:
         return pd.Series(np.nan, index=df.index)
@@ -258,6 +258,43 @@ def _compute_volatility_score() -> pd.Series:
 
 
 # ---------------------------------------------------------
+# Leading Growth Score (orders/inventories + claims)
+# ---------------------------------------------------------
+def _compute_growth_leading_score() -> pd.Series:
+    """
+    Leading growth score based on:
+      + Orders_YoY – Inventories_YoY (proxy for ISM New Orders - Inventories)
+      - Initial Unemployment Claims (4-week MA)
+
+    Strong orders growth vs inventories and low / stable claims => risk-on.
+    Collapsing spread and rising claims => risk-off.
+    """
+    df = _load_processed_csv("growth_leading.csv")
+
+    ism_spread = df.get("ISM_Spread")
+    claims = df.get("Initial_Claims_4WMA", df.get("Initial_Claims"))
+
+    if ism_spread is None and claims is None:
+        return pd.Series(np.nan, index=df.index)
+
+    components = []
+
+    if ism_spread is not None and ism_spread.std() > 0:
+        z_ism = (ism_spread - ism_spread.mean()) / ism_spread.std()
+        components.append(z_ism)  # higher spread => better growth
+
+    if claims is not None and claims.std() > 0:
+        z_claims = (claims - claims.mean()) / claims.std()
+        components.append(-z_claims)  # higher claims => worse growth
+
+    if not components:
+        return pd.Series(np.nan, index=df.index)
+
+    composite = sum(components) / len(components)
+    return _scale_to_0_100(composite)
+
+
+# ---------------------------------------------------------
 # Macro Risk Score (main entry point)
 # ---------------------------------------------------------
 def compute_macro_risk_score() -> pd.DataFrame:
@@ -271,6 +308,7 @@ def compute_macro_risk_score() -> pd.DataFrame:
       - fx_score
       - funding_score
       - volatility_score
+      - growth_leading_score
       - macro_score
     """
     fed_liq = _compute_fed_liquidity_score()
@@ -279,6 +317,7 @@ def compute_macro_risk_score() -> pd.DataFrame:
     fx = _compute_fx_score()
     funding = _compute_funding_score()
     vol = _compute_volatility_score()
+    growth_leading = _compute_growth_leading_score()
 
     # Common index
     all_index = fed_liq.index.union(curve.index)
@@ -286,6 +325,7 @@ def compute_macro_risk_score() -> pd.DataFrame:
     all_index = all_index.union(fx.index)
     all_index = all_index.union(funding.index)
     all_index = all_index.union(vol.index)
+    all_index = all_index.union(growth_leading.index)
 
     scores = pd.DataFrame(index=all_index)
     scores["fed_liquidity_score"] = fed_liq.reindex(all_index)
@@ -294,28 +334,32 @@ def compute_macro_risk_score() -> pd.DataFrame:
     scores["fx_score"] = fx.reindex(all_index)
     scores["funding_score"] = funding.reindex(all_index)
     scores["volatility_score"] = vol.reindex(all_index)
+    scores["growth_leading_score"] = growth_leading.reindex(all_index)
 
-    # Fill forward
+    # Fill forward so higher-frequency indicators lead without causing NaNs
     scores = scores.sort_index().ffill()
 
+    # Weights for each component (sum ≈ 1)
     weights: Dict[str, float] = {
-        "fed_liquidity_score": 0.25,
-        "curve_score": 0.20,
-        "credit_score": 0.20,
-        "fx_score": 0.15,
-        "funding_score": 0.10,
+        "fed_liquidity_score": 0.22,
+        "curve_score": 0.18,
+        "credit_score": 0.18,
+        "fx_score": 0.13,
+        "funding_score": 0.09,
         "volatility_score": 0.10,
+        "growth_leading_score": 0.10,
     }
 
     weight_series = pd.Series(weights)
 
     macro_scores = []
-    for idx, row in scores.iterrows():
+    for _, row in scores.iterrows():
         valid = row.dropna()
         if valid.empty:
             macro_scores.append(np.nan)
             continue
 
+        # Filter weights down to components actually present for this date
         w = weight_series.loc[valid.index]
         w = w / w.sum()
         macro_scores.append((valid * w).sum())

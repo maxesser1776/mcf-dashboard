@@ -71,9 +71,9 @@ def _get_date_column(df: pd.DataFrame) -> str:
 st.subheader("Macro Risk Score")
 st.caption(
     "This gauge compresses Fed liquidity, yield curve shape, credit spreads, FX stress, funding conditions, "
-    "and volatility regimes into a 0–100 score. Higher values lean risk-on, lower values lean risk-off. "
-    "The score updates whenever the pipelines are run; underlying series are a mix of daily (yields, credit, FX, "
-    "funding, volatility) and monthly (growth, inflation)."
+    "volatility regimes, and leading growth indicators into a 0–100 score. Higher values lean risk-on, lower values "
+    "lean risk-off. The score updates whenever the pipelines are run; underlying series are a mix of daily "
+    "(yields, credit, FX, funding, volatility) and monthly/weekly (growth, inflation, orders, claims)."
 )
 
 try:
@@ -101,7 +101,7 @@ try:
             )
         )
         fig.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
     with col_text:
         st.write(f"**Current macro score:** {latest_score:0.1f} / 100")
@@ -121,7 +121,7 @@ try:
         else:
             st.markdown(
                 "🟡 **Neutral / Mixed Environment**  \n"
-                "Signals are mixed across liquidity, curve, credit, FX, and volatility.  \n"
+                "Signals are mixed across liquidity, curve, credit, FX, volatility, and growth.  \n"
                 "Typical tilt: barbell of quality equities plus duration (Treasuries)."
             )
 
@@ -142,6 +142,8 @@ try:
             st.write(f"- Funding stress score: {latest['funding_score']:.2f}")
         if "volatility_score" in latest.index:
             st.write(f"- Volatility score: {latest['volatility_score']:.2f}")
+        if "growth_leading_score" in latest.index:
+            st.write(f"- Leading growth score: {latest['growth_leading_score']:.2f}")
 
 except Exception as e:
     traceback.print_exc()
@@ -162,12 +164,13 @@ section = st.sidebar.radio(
         "Credit Market Signals",
         "FX & Global Stress",
         "Growth & Inflation",
+        "Leading Growth Signals",
         "Volatility & Market Stress",
     ],
 )
 
 st.sidebar.markdown(
-    "v0.2 – Macro Capital Flows Dashboard. "
+    "v0.3 – Macro Capital Flows Dashboard. "
     "Run the pipelines or scheduled job to refresh data."
 )
 
@@ -214,7 +217,7 @@ if section == "Fed Liquidity & Plumbing":
             y1_label="Fed Assets (USD B)",
             y2_label="TGA Balance (USD B)",
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Fed_Balance_Sheet or TGA_Balance column missing in fed_liquidity.csv")
 
@@ -232,7 +235,7 @@ if section == "Fed Liquidity & Plumbing":
             title="Reverse Repo Facility Usage",
             y_label="USD B",
         )
-        st.plotly_chart(fig_rrp, width="stretch")
+        st.plotly_chart(fig_rrp, use_container_width=True)
     else:
         st.info("RRP_Usage column missing in fed_liquidity.csv")
 
@@ -265,7 +268,7 @@ if section == "Fed Liquidity & Plumbing":
                     title="EFFR - SOFR Spread",
                     y_label="pct points",
                 )
-                st.plotly_chart(fig_effr_sofr, width="stretch")
+                st.plotly_chart(fig_effr_sofr, use_container_width=True)
         else:
             with col_left:
                 st.info("EFFR_minus_SOFR column missing in funding_stress.csv")
@@ -279,7 +282,7 @@ if section == "Fed Liquidity & Plumbing":
                     title="EFFR - OBFR Spread",
                     y_label="pct points",
                 )
-                st.plotly_chart(fig_effr_obfr, width="stretch")
+                st.plotly_chart(fig_effr_obfr, use_container_width=True)
         else:
             with col_right:
                 st.info("EFFR_minus_OBFR column missing in funding_stress.csv")
@@ -343,7 +346,7 @@ elif section == "Yield Curve & Policy":
             title="2s10s Yield Curve (10Y - 2Y)",
             y_label="Basis Points",
         )
-        st.plotly_chart(fig_yc, width="stretch")
+        st.plotly_chart(fig_yc, use_container_width=True)
         st.caption(
             "Positive values mean a normal curve with long rates above short rates. "
             "Sustained negative values (inversion) often precede economic slowdowns. "
@@ -361,7 +364,7 @@ elif section == "Yield Curve & Policy":
             title="3m10y Yield Curve (10Y - 3M)",
             y_label="Basis Points",
         )
-        st.plotly_chart(fig_yc2, width="stretch")
+        st.plotly_chart(fig_yc2, use_container_width=True)
         st.caption(
             "The 3m10y curve incorporates both Fed policy expectations and term premia. "
             "Deep, persistent inversions here are particularly important for recession risk. "
@@ -406,7 +409,7 @@ elif section == "Credit Market Signals":
             y1_label="IG OAS (bps)",
             y2_label="HY OAS (bps)",
         )
-        st.plotly_chart(fig_cs, width="stretch")
+        st.plotly_chart(fig_cs, use_container_width=True)
         st.caption(
             "IG OAS reflects risk in higher quality corporate bonds, while HY OAS reflects risk in junk bonds. "
             "Fast widening in HY, especially if IG also widens, often aligns with risk-off regimes. "
@@ -449,7 +452,7 @@ elif section == "FX & Global Stress":
             title="US Dollar Index (DXY)",
             y_label="Index",
         )
-        st.plotly_chart(fig_dxy, width="stretch")
+        st.plotly_chart(fig_dxy, use_container_width=True)
         st.caption(
             "A persistently strong and rising USD often coincides with tighter global dollar liquidity "
             "and pressure on risk assets, especially outside the US. "
@@ -467,7 +470,7 @@ elif section == "FX & Global Stress":
             title="EM FX Basket",
             y_label="Index",
         )
-        st.plotly_chart(fig_emfx, width="stretch")
+        st.plotly_chart(fig_emfx, use_container_width=True)
         st.caption(
             "This basket proxies EM currency strength versus the dollar. "
             "Falling values suggest EM under pressure and a more fragile global risk backdrop. "
@@ -508,7 +511,7 @@ elif section == "Growth & Inflation":
             title="Industrial Production YoY",
             y_label="Percent",
         )
-        st.plotly_chart(fig_ip, width="stretch")
+        st.plotly_chart(fig_ip, use_container_width=True)
         st.caption(
             "Industrial production YoY is a classic real-economy growth indicator. "
             "Falling or negative values often coincide with slowdowns or recessions. "
@@ -526,7 +529,7 @@ elif section == "Growth & Inflation":
             title="Headline CPI YoY",
             y_label="Percent",
         )
-        st.plotly_chart(fig_cpi, width="stretch")
+        st.plotly_chart(fig_cpi, use_container_width=True)
         st.caption(
             "Headline CPI YoY measures broad consumer price inflation. "
             "Persistent readings well above the policy target imply tighter financial conditions. "
@@ -544,7 +547,7 @@ elif section == "Growth & Inflation":
             title="Core PCE YoY",
             y_label="Percent",
         )
-        st.plotly_chart(fig_pce, width="stretch")
+        st.plotly_chart(fig_pce, use_container_width=True)
         st.caption(
             "Core PCE YoY is the Fed’s preferred inflation gauge. "
             "It strips out food and energy to focus on underlying price pressures. "
@@ -555,7 +558,75 @@ elif section == "Growth & Inflation":
 
 
 # ---------------------------------------------------------
-# 7. Volatility & Market Stress
+# 7. Leading Growth Signals
+# ---------------------------------------------------------
+elif section == "Leading Growth Signals":
+    st.header("Leading Growth Signals")
+    st.caption(
+        "This page focuses on forward-looking growth indicators: manufacturers' orders vs inventories and "
+        "Initial Unemployment Claims. A falling orders–inventories spread and rising claims often precede "
+        "broader slowdowns or recessions. Orders/inventories are monthly; claims are weekly."
+    )
+
+    try:
+        gl = load_processed_csv("growth_leading.csv")
+    except FileNotFoundError as e:
+        st.error(str(e))
+        st.stop()
+
+    date_col = _get_date_column(gl)
+    gl[date_col] = pd.to_datetime(gl[date_col])
+
+    # Filter to non-null ISM_Spread rows so the line actually shows
+    if "ISM_Spread" in gl.columns:
+        gl_ism = gl.dropna(subset=["ISM_Spread"]).copy()
+        if not gl_ism.empty:
+            st.subheader("Orders vs Inventories Growth Spread")
+            fig_ism = single_line_plot(
+                gl_ism,
+                x=date_col,
+                y="ISM_Spread",
+                title="Manufacturers' Orders YoY – Inventories YoY",
+                y_label="Percentage Points",
+            )
+            st.plotly_chart(fig_ism, use_container_width=True)
+            st.caption(
+                "This spread proxies the ISM New Orders – Inventories signal using manufacturers' orders and "
+                "inventories growth. Large positive values are associated with strong forward demand; "
+                "falling or negative values suggest weakening orders relative to stock levels. "
+                "Updated monthly from Census manufacturing data."
+            )
+        else:
+            st.info("ISM_Spread is present but all values are NaN.")
+    else:
+        st.info("ISM_Spread column missing in growth_leading.csv")
+
+    # Filter to non-null claims rows
+    if "Initial_Claims_4WMA" in gl.columns:
+        gl_claims = gl.dropna(subset=["Initial_Claims_4WMA"]).copy()
+        if not gl_claims.empty:
+            st.subheader("Initial Jobless Claims (4-week Moving Average)")
+            fig_claims = single_line_plot(
+                gl_claims,
+                x=date_col,
+                y="Initial_Claims_4WMA",
+                title="Initial Unemployment Claims (4-week MA)",
+                y_label="Number of Claims",
+            )
+            st.plotly_chart(fig_claims, use_container_width=True)
+            st.caption(
+                "Initial unemployment claims are one of the fastest labor-market indicators. "
+                "A sustained uptrend in the 4-week moving average often signals increasing stress in the real economy. "
+                "Claims data is released weekly by the US Department of Labor."
+            )
+        else:
+            st.info("Initial_Claims_4WMA is present but all values are NaN.")
+    else:
+        st.info("Initial_Claims_4WMA column missing in growth_leading.csv")
+
+
+# ---------------------------------------------------------
+# 8. Volatility & Market Stress
 # ---------------------------------------------------------
 elif section == "Volatility & Market Stress":
     st.header("Volatility & Market Stress")
@@ -575,7 +646,6 @@ elif section == "Volatility & Market Stress":
     date_col = _get_date_column(vol)
     vol[date_col] = pd.to_datetime(vol[date_col])
 
-    # VIX front-month
     if "VIX_Short" in vol.columns:
         st.subheader("Front-Month VIX")
         fig_vix = single_line_plot(
@@ -585,7 +655,7 @@ elif section == "Volatility & Market Stress":
             title="VIX (Front-Month Implied Volatility)",
             y_label="Index Level",
         )
-        st.plotly_chart(fig_vix, width="stretch")
+        st.plotly_chart(fig_vix, use_container_width=True)
         st.caption(
             "Higher VIX levels indicate greater implied volatility in S&P 500 options. "
             "Short, sharp spikes often correspond to equity selloffs or event risk. "
@@ -594,7 +664,6 @@ elif section == "Volatility & Market Stress":
     else:
         st.info("VIX_Short column missing in volatility_regimes.csv")
 
-    # VIX term structure
     if "VIX_Term_Ratio" in vol.columns:
         st.subheader("VIX Term Structure (Front / 3M)")
         fig_term = single_line_plot(
@@ -604,7 +673,7 @@ elif section == "Volatility & Market Stress":
             title="VIX Term Structure Ratio (Front / 3M)",
             y_label="Ratio",
         )
-        st.plotly_chart(fig_term, width="stretch")
+        st.plotly_chart(fig_term, use_container_width=True)
         st.caption(
             "When the ratio is below 1, the curve is in contango (front < 3M), which is typical in calm markets. "
             "When the ratio moves above 1 and stays there, the curve is in backwardation and often reflects "
@@ -613,7 +682,6 @@ elif section == "Volatility & Market Stress":
     else:
         st.info("VIX_Term_Ratio column missing in volatility_regimes.csv")
 
-    # MOVE Index
     if "MOVE_Index" in vol.columns:
         st.subheader("MOVE Index (Treasury Volatility)")
         fig_move = single_line_plot(
@@ -623,7 +691,7 @@ elif section == "Volatility & Market Stress":
             title="ICE BofAML MOVE Index",
             y_label="Index Level",
         )
-        st.plotly_chart(fig_move, width="stretch")
+        st.plotly_chart(fig_move, use_container_width=True)
         st.caption(
             "The MOVE Index measures implied volatility in US Treasury markets. "
             "Elevated or spiking MOVE levels often coincide with rate shocks, bond market stress, "
