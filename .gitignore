@@ -13,7 +13,6 @@ __pycache__/
 # Sensitive files
 .env
 
-
 # OS/IDE specific
 .DS_Store
 .vscode/

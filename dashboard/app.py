@@ -1,67 +1,24 @@
 # dashboard/app.py
 
+import os
 import sys
 from pathlib import Path
-
-# ---------------------------------------------------------
-# Ensure project root is on sys.path so `utils.*` imports work
-# ---------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parents[1]
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+import traceback
 
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
+# ---------------------------------------------------------
+# Ensure project root is on sys.path so `utils.*` imports work
+# ---------------------------------------------------------
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from utils.fetch import load_processed_csv
 from utils.plot import single_line_plot, dual_axis_plot
 from utils.risk_score import compute_macro_risk_score
-
-
-# ---------------------------------------------------------
-# Helper: ensure we have a datetime column available for plotting
-# ---------------------------------------------------------
-def _prepare_date_column(df: pd.DataFrame):
-    """
-    Ensure there is a usable datetime column for plotting.
-    Returns a tuple: (df_with_datetime_col, date_col_name)
-    """
-    # Prefer explicit date-like columns if present
-    for col in ["record_date", "Date", "date"]:
-        if col in df.columns:
-            df = df.copy()
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-            return df, col
-
-    # If index is already datetime, turn it into a column called Date
-    if isinstance(df.index, pd.DatetimeIndex):
-        df = df.reset_index()
-        df.rename(columns={"index": "Date"}, inplace=True)
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        return df, "Date"
-
-    # Last fallback: treat first column as date-like
-    df = df.reset_index()
-    first = df.columns[0]
-    df[first] = pd.to_datetime(df[first], errors="coerce")
-    df.rename(columns={first: "Date"}, inplace=True)
-    return df, "Date"
-
-
-def _find_column(df: pd.DataFrame, *substrings: str):
-    """
-    Find the first column whose name contains ALL the given substrings (case-insensitive).
-    Returns the column name or None.
-    """
-    cols = df.columns
-    lowered = [c.lower() for c in cols]
-
-    for col, low in zip(cols, lowered):
-        if all(s.lower() in low for s in substrings):
-            return col
-    return None
-
 
 # ---------------------------------------------------------
 # Page config
@@ -72,33 +29,63 @@ st.set_page_config(
 )
 
 st.title("Macro Capital Flows Dashboard")
-st.caption("Prototype dashboard for tracking global liquidity and macro risk regimes")
+st.caption("Tracking liquidity, curve, credit, FX, and macro data to infer risk regimes.")
+
+
+# ---------------------------------------------------------
+# Helper: ensure we have a usable date column
+# ---------------------------------------------------------
+def _get_date_column(df: pd.DataFrame) -> str:
+    """
+    Ensure there is a concrete date column in the DataFrame and return its name.
+
+    - If a known date column ('record_date', 'Date', 'date') exists, use it.
+    - If the index is a DatetimeIndex, reset it into a real column:
+        * If the index has a name, that name is used.
+        * Otherwise the column is renamed to 'date'.
+    - Otherwise, fallback to the first column.
+    """
+    # 1) Explicit date columns
+    for col in ["record_date", "Date", "date"]:
+        if col in df.columns:
+            return col
+
+    # 2) DatetimeIndex -> turn into column
+    if isinstance(df.index, pd.DatetimeIndex):
+        idx_name = df.index.name
+
+        # Reset index in-place so callers see the updated columns
+        df.reset_index(inplace=True)
+
+        if idx_name is None:
+            # Pandas will have created a column named 'index' -> rename to 'date'
+            if "index" in df.columns:
+                df.rename(columns={"index": "date"}, inplace=True)
+                return "date"
+            # Fallback if something odd happens
+            return df.columns[0]
+        else:
+            # Index had a name, and reset_index will use that as column name
+            return idx_name
+
+    # 3) Fallback: just use the first column
+    return df.columns[0]
 
 
 # ---------------------------------------------------------
 # 1. Macro Risk Score (top-level summary)
 # ---------------------------------------------------------
 st.subheader("Macro Risk Score")
+st.caption(
+    "This gauge compresses Fed liquidity, yield curve shape, credit spreads, FX stress, "
+    "and funding conditions into a 0–100 score. Higher values lean risk-on, lower values "
+    "lean risk-off."
+)
 
 try:
-    scores = compute_macro_risk_score()
-
-    latest_components = None
-
-    if isinstance(scores, pd.DataFrame) and len(scores) > 0:
-        macro_df = scores
-        latest_row = macro_df.iloc[-1]
-
-        if "macro_score" in macro_df.columns:
-            latest_score = float(latest_row["macro_score"])
-        else:
-            latest_score = float(latest_row.iloc[-1])
-
-        latest_components = latest_row
-
-    else:
-        # No data – treat as neutral
-        latest_score = 50.0
+    macro_df = compute_macro_risk_score()
+    latest = macro_df.iloc[-1]
+    latest_score = float(latest["macro_score"])
 
     col_gauge, col_text = st.columns([1, 1.2])
 
@@ -128,37 +115,44 @@ try:
         if latest_score >= 65:
             st.markdown(
                 "🟢 **Risk-On Environment**  \n"
-                "- Liquidity and macro conditions are supportive.  \n"
-                "- Tilt toward equities, small caps, EM, and cyclicals."
+                "Liquidity and macro conditions are broadly supportive.  \n"
+                "Typical tilt: more equities, small caps, EM, and cyclicals."
             )
         elif latest_score <= 35:
             st.markdown(
                 "🔴 **Risk-Off Environment**  \n"
-                "- Liquidity and/or credit conditions are deteriorating.  \n"
-                "- Favor Treasuries, USD, defensives; reduce high-beta exposure."
+                "Liquidity and/or credit conditions are deteriorating.  \n"
+                "Typical tilt: Treasuries, USD, defensives; reduce high-beta exposure."
             )
         else:
             st.markdown(
                 "🟡 **Neutral / Mixed Environment**  \n"
-                "- Signals are mixed across liquidity, curve, credit, and FX.  \n"
-                "- Consider a barbell of quality equities + duration (Treasuries)."
+                "Signals are mixed across liquidity, curve, credit, and FX.  \n"
+                "Typical tilt: barbell of quality equities plus duration (Treasuries)."
             )
 
-        if isinstance(latest_components, pd.Series):
-            if "fed_liquidity_score" in latest_components.index:
-                st.write(f"- Fed liquidity score: {latest_components['fed_liquidity_score']:.2f}")
-            if "curve_score" in latest_components.index:
-                st.write(f"- Yield curve score: {latest_components['curve_score']:.2f}")
-            if "credit_score" in latest_components.index:
-                st.write(f"- Credit stress score: {latest_components['credit_score']:.2f}")
-            if "fx_score" in latest_components.index:
-                st.write(f"- USD liquidity score: {latest_components['fx_score']:.2f}")
+        st.caption(
+            "Component scores are z-scored and normalized per factor, then combined with weights. "
+            "This is a regime indicator, not a precise return forecast."
+        )
+
+        # Component scores if available
+        if "fed_liquidity_score" in latest.index:
+            st.write(f"- Fed liquidity score: {latest['fed_liquidity_score']:.2f}")
+        if "curve_score" in latest.index:
+            st.write(f"- Yield curve score: {latest['curve_score']:.2f}")
+        if "credit_score" in latest.index:
+            st.write(f"- Credit stress score: {latest['credit_score']:.2f}")
+        if "fx_score" in latest.index:
+            st.write(f"- USD liquidity score: {latest['fx_score']:.2f}")
+        if "funding_score" in latest.index:
+            st.write(f"- Funding stress score: {latest['funding_score']:.2f}")
 
 except Exception as e:
+    traceback.print_exc()
     st.warning(f"Macro risk score could not be computed: {e}")
 
 st.markdown("---")
-
 
 # ---------------------------------------------------------
 # Sidebar navigation
@@ -176,7 +170,10 @@ section = st.sidebar.radio(
     ],
 )
 
-st.sidebar.markdown("v0.1 – Prototype scaffold for macro capital dashboard")
+st.sidebar.markdown(
+    "v0.1 – Prototype macro capital flows dashboard. "
+    "Data from FRED, Yahoo Finance, and NY Fed series."
+)
 
 
 # ---------------------------------------------------------
@@ -184,22 +181,33 @@ st.sidebar.markdown("v0.1 – Prototype scaffold for macro capital dashboard")
 # ---------------------------------------------------------
 if section == "Fed Liquidity & Plumbing":
     st.header("Federal Reserve Plumbing")
+    st.caption(
+        "This page shows how the Fed, Treasury, and money markets are adding or draining dollar liquidity. "
+        "The balance sheet and TGA affect systemic liquidity, RRP reflects excess cash parked at the Fed, "
+        "and funding spreads flag stress in short term markets."
+    )
 
+    # ---------------- Fed balance sheet / TGA / RRP ----------------
     try:
         data = load_processed_csv("fed_liquidity.csv")
     except FileNotFoundError as e:
         st.error(str(e))
         st.stop()
 
-    # Normalise column names a bit
     if "closing_balance" in data.columns and "TGA_Balance" not in data.columns:
         data = data.rename(columns={"closing_balance": "TGA_Balance"})
 
-    df_plot, date_col = _prepare_date_column(data)
+    date_col = _get_date_column(data)
+    df_plot = data.copy()
+    df_plot[date_col] = pd.to_datetime(df_plot[date_col])
 
     # Fed balance sheet + TGA
     if "Fed_Balance_Sheet" in df_plot.columns and "TGA_Balance" in df_plot.columns:
         st.subheader("Fed Balance Sheet & TGA")
+        st.caption(
+            "Fed assets (QE/QT) push liquidity into or out of the system, while changes in the Treasury "
+            "General Account (TGA) can temporarily drain or add reserves."
+        )
         fig = dual_axis_plot(
             df_plot,
             x=date_col,
@@ -216,6 +224,10 @@ if section == "Fed Liquidity & Plumbing":
     # RRP usage
     if "RRP_Usage" in df_plot.columns:
         st.subheader("Reverse Repo (RRP) Usage")
+        st.caption(
+            "High RRP usage means money funds prefer to lend to the Fed instead of private markets. "
+            "A falling RRP balance often signals liquidity moving back into risk assets."
+        )
         fig_rrp = single_line_plot(
             df_plot,
             x=date_col,
@@ -227,12 +239,95 @@ if section == "Fed Liquidity & Plumbing":
     else:
         st.info("RRP_Usage column missing in fed_liquidity.csv")
 
+    st.markdown("---")
+
+    # ---------------- Funding Stress UI (EFFR vs SOFR / OBFR) ----------------
+    st.subheader("Funding Stress: EFFR vs SOFR / OBFR")
+    st.caption(
+        "These spreads compare the effective fed funds rate to secured and overnight benchmarks. "
+        "Persistent positive spreads can indicate tightening conditions or stress in unsecured funding."
+    )
+
+    try:
+        fs = load_processed_csv("funding_stress.csv")
+    except FileNotFoundError:
+        st.info("funding_stress.csv not found yet. Run the funding_stress pipeline to enable this section.")
+    else:
+        fs_date_col = _get_date_column(fs)
+        fs_plot = fs.copy()
+        fs_plot[fs_date_col] = pd.to_datetime(fs_plot[fs_date_col])
+
+        col_left, col_right = st.columns(2)
+
+        # EFFR - SOFR
+        if "EFFR_minus_SOFR" in fs_plot.columns:
+            with col_left:
+                fig_effr_sofr = single_line_plot(
+                    fs_plot,
+                    x=fs_date_col,
+                    y="EFFR_minus_SOFR",
+                    title="EFFR - SOFR Spread",
+                    y_label="pct points",
+                )
+                st.plotly_chart(fig_effr_sofr, width="stretch")
+        else:
+            with col_left:
+                st.info("EFFR_minus_SOFR column missing in funding_stress.csv")
+
+        # EFFR - OBFR
+        if "EFFR_minus_OBFR" in fs_plot.columns:
+            with col_right:
+                fig_effr_obfr = single_line_plot(
+                    fs_plot,
+                    x=fs_date_col,
+                    y="EFFR_minus_OBFR",
+                    title="EFFR - OBFR Spread",
+                    y_label="pct points",
+                )
+                st.plotly_chart(fig_effr_obfr, width="stretch")
+        else:
+            with col_right:
+                st.info("EFFR_minus_OBFR column missing in funding_stress.csv")
+
+        numeric_cols = [c for c in ["EFFR_minus_SOFR", "EFFR_minus_OBFR"] if c in fs_plot.columns]
+        latest_row = fs_plot.dropna(subset=numeric_cols).iloc[-1] if numeric_cols else None
+
+        if latest_row is not None:
+            effr_sofr = float(latest_row.get("EFFR_minus_SOFR", 0.0))
+            effr_obfr = float(latest_row.get("EFFR_minus_OBFR", 0.0))
+
+            st.markdown("#### Current Funding Conditions")
+
+            stress_level = "🟢 **Normal** – Funding markets look orderly."
+            if effr_sofr > 0.10 or effr_obfr > 0.10:
+                stress_level = "🟠 **Elevated Stress** – Fed funds rich vs SOFR/OBFR; watch funding closely."
+            if effr_sofr > 0.25 or effr_obfr > 0.25:
+                stress_level = "🔴 **High Stress** – Significant dislocation; markets leaning on safer collateral."
+
+            st.write(
+                f"- Latest EFFR − SOFR: `{effr_sofr:.3f}`  \n"
+                f"- Latest EFFR − OBFR: `{effr_obfr:.3f}`  \n\n"
+                f"{stress_level}"
+            )
+
+            st.caption(
+                "Short spikes can happen around month end or policy events. "
+                "Sustained widening is more concerning than one day noise."
+            )
+        else:
+            st.info("No recent non-NaN funding spread values available to interpret.")
+
 
 # ---------------------------------------------------------
 # 3. Yield Curve & Policy
 # ---------------------------------------------------------
 elif section == "Yield Curve & Policy":
     st.header("Yield Curve & Policy")
+    st.caption(
+        "The yield curve compares long term and short term interest rates. "
+        "Inversions (when short rates exceed long rates) have historically been a reliable recession signal. "
+        "Here we track the classic 2s10s and 3m10y spreads."
+    )
 
     try:
         yc = load_processed_csv("yield_curve.csv")
@@ -240,31 +335,42 @@ elif section == "Yield Curve & Policy":
         st.error(str(e))
         st.stop()
 
-    yc_plot, date_col = _prepare_date_column(yc)
+    date_col = _get_date_column(yc)
+    yc[date_col] = pd.to_datetime(yc[date_col])
 
-    if "Spread_2s10s" in yc_plot.columns:
+    if "Spread_2s10s" in yc.columns:
         st.subheader("2s10s Yield Curve Spread")
         fig_yc = single_line_plot(
-            yc_plot,
+            yc,
             x=date_col,
             y="Spread_2s10s",
             title="2s10s Yield Curve (10Y - 2Y)",
             y_label="Basis Points",
         )
         st.plotly_chart(fig_yc, width="stretch")
+        st.caption(
+            "Positive values mean a normal curve with long rates above short rates. "
+            "Sustained negative values (inversion) often precede economic slowdowns."
+        )
     else:
         st.info("Spread_2s10s column missing in yield_curve.csv")
 
-    if "Spread_3m10y" in yc_plot.columns:
+    if "Spread_3m10y" in yc.columns:
         st.subheader("3m10y Yield Curve Spread")
         fig_yc2 = single_line_plot(
-            yc_plot,
+            yc,
             x=date_col,
             y="Spread_3m10y",
             title="3m10y Yield Curve (10Y - 3M)",
             y_label="Basis Points",
         )
         st.plotly_chart(fig_yc2, width="stretch")
+        st.caption(
+            "The 3m10y curve incorporates both Fed policy expectations and term premia. "
+            "Deep, persistent inversions here are particularly important for recession risk."
+        )
+    else:
+        st.info("Spread_3m10y column missing in yield_curve.csv")
 
 
 # ---------------------------------------------------------
@@ -272,6 +378,11 @@ elif section == "Yield Curve & Policy":
 # ---------------------------------------------------------
 elif section == "Credit Market Signals":
     st.header("Credit Market Signals")
+    st.caption(
+        "Credit spreads measure the extra yield that corporate bonds pay over Treasuries. "
+        "Rising spreads mean investors are demanding more compensation for credit risk, "
+        "which can signal stress before it shows up in equities."
+    )
 
     try:
         cs = load_processed_csv("credit_spreads.csv")
@@ -279,48 +390,32 @@ elif section == "Credit Market Signals":
         st.error(str(e))
         st.stop()
 
-    cs_plot, date_col = _prepare_date_column(cs)
-    cols_available = list(cs_plot.columns)
+    date_col = _get_date_column(cs)
+    cs[date_col] = pd.to_datetime(cs[date_col])
 
-    ig_col = "IG_OAS" if "IG_OAS" in cols_available else None
-    hy_col = "HY_OAS" if "HY_OAS" in cols_available else None
+    cols_available = cs.columns.tolist()
 
-    if ig_col and hy_col:
+    if "IG_OAS" in cols_available and "HY_OAS" in cols_available:
         st.subheader("IG vs HY Credit Spreads")
         fig_cs = dual_axis_plot(
-            cs_plot,
+            cs,
             x=date_col,
-            y1=ig_col,
-            y2=hy_col,
+            y1="IG_OAS",
+            y2="HY_OAS",
             title="Investment Grade vs High Yield Spreads",
             y1_label="IG OAS (bps)",
             y2_label="HY OAS (bps)",
         )
         st.plotly_chart(fig_cs, width="stretch")
-    elif ig_col:
-        st.subheader("Investment Grade Credit Spreads")
-        fig_ig = single_line_plot(
-            cs_plot,
-            x=date_col,
-            y=ig_col,
-            title="Investment Grade OAS",
-            y_label="bps",
+        st.caption(
+            "IG OAS reflects risk in higher quality corporate bonds, while HY OAS reflects risk in junk bonds. "
+            "Fast widening in HY, especially if IG also widens, often aligns with risk-off regimes."
         )
-        st.plotly_chart(fig_ig, width="stretch")
-        st.info("HY_OAS column missing in credit_spreads.csv – showing IG only.")
-    elif hy_col:
-        st.subheader("High Yield Credit Spreads")
-        fig_hy = single_line_plot(
-            cs_plot,
-            x=date_col,
-            y=hy_col,
-            title="High Yield OAS",
-            y_label="bps",
-        )
-        st.plotly_chart(fig_hy, width="stretch")
-        st.info("IG_OAS column missing in credit_spreads.csv – showing HY only.")
     else:
-        st.info("No IG_OAS or HY_OAS columns found in credit_spreads.csv.")
+        if "IG_OAS" not in cols_available:
+            st.info("IG_OAS column missing in credit_spreads.csv")
+        if "HY_OAS" not in cols_available:
+            st.info("HY_OAS column missing in credit_spreads.csv")
 
 
 # ---------------------------------------------------------
@@ -328,6 +423,11 @@ elif section == "Credit Market Signals":
 # ---------------------------------------------------------
 elif section == "FX & Global Stress":
     st.header("FX & Global Stress")
+    st.caption(
+        "The dollar sits at the center of global funding. A strong, rapidly rising USD can tighten "
+        "financial conditions for the rest of the world. EM FX trends help show whether global risk "
+        "appetite is healthy or under pressure."
+    )
 
     try:
         fx = load_processed_csv("fx_liquidity.csv")
@@ -335,31 +435,42 @@ elif section == "FX & Global Stress":
         st.error(str(e))
         st.stop()
 
-    fx_plot, date_col = _prepare_date_column(fx)
+    date_col = _get_date_column(fx)
+    fx[date_col] = pd.to_datetime(fx[date_col])
 
-    if "DXY" in fx_plot.columns:
+    if "DXY" in fx.columns:
         st.subheader("US Dollar Index (DXY)")
         fig_dxy = single_line_plot(
-            fx_plot,
+            fx,
             x=date_col,
             y="DXY",
             title="US Dollar Index (DXY)",
             y_label="Index",
         )
         st.plotly_chart(fig_dxy, width="stretch")
+        st.caption(
+            "A persistently strong and rising USD often coincides with tighter global dollar liquidity "
+            "and pressure on risk assets, especially outside the US."
+        )
     else:
         st.info("DXY column missing in fx_liquidity.csv")
 
-    if "EM_FX_Basket" in fx_plot.columns:
+    if "EM_FX_Basket" in fx.columns:
         st.subheader("EM FX Basket (Inverse Stress Proxy)")
         fig_emfx = single_line_plot(
-            fx_plot,
+            fx,
             x=date_col,
             y="EM_FX_Basket",
             title="EM FX Basket",
             y_label="Index",
         )
         st.plotly_chart(fig_emfx, width="stretch")
+        st.caption(
+            "This basket proxies EM currency strength versus the dollar. "
+            "Falling values suggest EM under pressure and a more fragile global risk backdrop."
+        )
+    else:
+        st.info("EM_FX_Basket column missing in fx_liquidity.csv")
 
 
 # ---------------------------------------------------------
@@ -367,6 +478,10 @@ elif section == "FX & Global Stress":
 # ---------------------------------------------------------
 elif section == "Growth & Inflation":
     st.header("Growth & Inflation")
+    st.caption(
+        "This page tracks real activity and price trends. The idea is to see whether we are in an "
+        "overheating inflationary phase, a disinflationary soft landing, or a growth slowdown."
+    )
 
     try:
         macro = load_processed_csv("macro_core.csv")
@@ -374,79 +489,59 @@ elif section == "Growth & Inflation":
         st.error(str(e))
         st.stop()
 
-    macro_plot, date_col = _prepare_date_column(macro)
+    date_col = _get_date_column(macro)
+    macro[date_col] = pd.to_datetime(macro[date_col])
 
-    # Try to find PMI / CPI / PCE by flexible name matching
-    pmi_col = "PMI" if "PMI" in macro_plot.columns else _find_column(macro_plot, "pmi")
-    cpi_col = (
-        "CPI_YoY"
-        if "CPI_YoY" in macro_plot.columns
-        else _find_column(macro_plot, "cpi", "yoy")
-        or _find_column(macro_plot, "cpi")
-    )
-    pce_col = (
-        "PCE_YoY"
-        if "PCE_YoY" in macro_plot.columns
-        else _find_column(macro_plot, "pce", "yoy")
-        or _find_column(macro_plot, "pce")
-    )
-
-    # If we still couldn't find explicit macro series, fall back to any numeric columns
-    numeric_cols = list(macro_plot.select_dtypes(include=["number"]).columns)
-
-    def _pick_or_fallback(preferred, used):
-        if preferred and preferred in macro_plot.columns:
-            used.add(preferred)
-            return preferred
-        for col in numeric_cols:
-            if col not in used:
-                used.add(col)
-                return col
-        return None
-
-    used_cols = set()
-    pmi_col = _pick_or_fallback(pmi_col, used_cols)
-    cpi_col = _pick_or_fallback(cpi_col, used_cols)
-    pce_col = _pick_or_fallback(pce_col, used_cols)
-
-    # PMI
-    if pmi_col:
-        st.subheader(f"Manufacturing PMI ({pmi_col})")
-        fig_pmi = single_line_plot(
-            macro_plot,
+    # Industrial Production YoY (Growth Proxy)
+    if "Industrial_Production" in macro.columns:
+        macro["IP_YoY"] = macro["Industrial_Production"].pct_change(12) * 100
+        st.subheader("Industrial Production YoY")
+        fig_ip = single_line_plot(
+            macro,
             x=date_col,
-            y=pmi_col,
-            title="Manufacturing PMI",
-            y_label="Index / Level",
+            y="IP_YoY",
+            title="Industrial Production YoY",
+            y_label="Percent",
         )
-        st.plotly_chart(fig_pmi, width="stretch")
+        st.plotly_chart(fig_ip, width="stretch")
+        st.caption(
+            "Industrial production YoY is a classic real-economy growth indicator. "
+            "Falling or negative values often coincide with slowdowns or recessions."
+        )
     else:
-        st.info("No usable PMI-like or numeric column found in macro_core.csv.")
+        st.info("Industrial_Production column missing in macro_core.csv")
 
-    # CPI
-    if cpi_col:
-        st.subheader(f"CPI / Inflation ({cpi_col})")
+    # Inflation
+    if "CPI_YoY" in macro.columns:
+        st.subheader("CPI YoY")
         fig_cpi = single_line_plot(
-            macro_plot,
+            macro,
             x=date_col,
-            y=cpi_col,
-            title="CPI / Inflation",
-            y_label="Percent / Index",
+            y="CPI_YoY",
+            title="Headline CPI YoY",
+            y_label="Percent",
         )
         st.plotly_chart(fig_cpi, width="stretch")
+        st.caption(
+            "Headline CPI YoY measures broad consumer price inflation. "
+            "Persistent readings well above the policy target imply tighter financial conditions."
+        )
     else:
-        st.info("No usable CPI-like or additional numeric column found in macro_core.csv.")
+        st.info("CPI_YoY column missing in macro_core.csv")
 
-    # PCE
-    if pce_col:
-        st.subheader(f"PCE / Core Inflation ({pce_col})")
+    if "PCE_YoY" in macro.columns:
+        st.subheader("PCE YoY")
         fig_pce = single_line_plot(
-            macro_plot,
+            macro,
             x=date_col,
-            y=pce_col,
-            title="PCE / Core Inflation",
-            y_label="Percent / Index",
+            y="PCE_YoY",
+            title="Core PCE YoY",
+            y_label="Percent",
         )
         st.plotly_chart(fig_pce, width="stretch")
+        st.caption(
+            "Core PCE YoY is the Fed’s preferred inflation gauge. "
+            "It strips out food and energy to focus on underlying price pressures."
+        )
     else:
-        st.info("No usable PCE-like or additional numeric column found in macro_core.csv.")
+        st.info("PCE_YoY column missing in macro_core.csv")
