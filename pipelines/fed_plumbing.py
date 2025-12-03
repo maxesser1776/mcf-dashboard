@@ -19,9 +19,6 @@ def fetch_fed_balance_sheet():
     return df
 
 # --- 2. Treasury General Account (TGA) from FiscalData API
-import requests
-import pandas as pd
-
 def fetch_tga_balance(start_date="2015-01-01"):
     """
     Fetch a unified TGA series (legacy + modern) back to at least `start_date`,
@@ -100,13 +97,36 @@ def fetch_rrp():
     df.index = pd.to_datetime(df.index)
     return df
 
-# --- 4. Combine all into single DataFrame
+# --- 4. Combine all into single DataFrame + Net Liquidity / Flows
 def fetch_fed_liquidity_data():
     fed_bs = fetch_fed_balance_sheet()
     tga = fetch_tga_balance()
     rrp = fetch_rrp()
-    df = fed_bs.join([tga, rrp], how="outer").sort_index()
-    return df
+
+    data = fed_bs.join([tga, rrp], how="outer").sort_index()
+
+    # Ensure a consistent TGA column name
+    if "TGA_Balance" not in data.columns and "closing_balance" in data.columns:
+        data.rename(columns={"closing_balance": "TGA_Balance"}, inplace=True)
+
+    # --- Net liquidity level (rough proxy) ---
+    # Net_Liquidity = Fed_Balance_Sheet - TGA_Balance - RRP_Usage
+    if {"Fed_Balance_Sheet", "TGA_Balance", "RRP_Usage"}.issubset(data.columns):
+        data["Net_Liquidity"] = (
+            data["Fed_Balance_Sheet"]
+            - data["TGA_Balance"].fillna(0)
+            - data["RRP_Usage"].fillna(0)
+        )
+
+        # --- Liquidity *flows* (your “volume”) ---
+        data["Net_Liq_Change_1d"] = data["Net_Liquidity"].diff()
+        data["Net_Liq_Change_5d"] = data["Net_Liquidity"].diff(5)
+        data["Net_Liq_Change_20d"] = data["Net_Liquidity"].diff(20)
+    else:
+        print("⚠️ Net liquidity columns missing one or more of Fed_Balance_Sheet / TGA_Balance / RRP_Usage.")
+
+    return data
+
 
 if __name__ == "__main__":
     data = fetch_fed_liquidity_data()

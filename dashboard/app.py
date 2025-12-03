@@ -1,5 +1,3 @@
-# dashboard/app.py
-
 import os
 import sys
 import traceback
@@ -9,6 +7,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import yfinance as yf
+from pandas.tseries.offsets import BDay
 
 # ---------------------------------------------------------
 # Ensure project root is on sys.path so `utils.*` imports work
@@ -34,6 +33,44 @@ st.title("Macro Capital Flows Dashboard")
 st.caption(
     "Tracking liquidity, curve, credit, FX, volatility, and macro data to infer risk regimes. "
     "Data freshness depends on provider: market data is daily; macro data is weekly or monthly."
+)
+
+
+# ---------------------------------------------------------
+# Sidebar navigation & global settings
+# ---------------------------------------------------------
+st.sidebar.header("Settings")
+
+section = st.sidebar.radio(
+    "Section",
+    [
+        "Gold / Silver Ratio",
+        "Fed Liquidity & Plumbing",
+        "Yield Curve & Policy",
+        "Credit Market Signals",
+        "FX & Global Stress",
+        "Growth & Inflation",
+        "Leading Growth Signals",
+        "Volatility & Market Stress",
+        "Model Diagnostics",
+        "Historical Accuracy",
+    ],
+)
+
+scaling_mode_label = st.sidebar.selectbox(
+    "Scaling mode for component scores",
+    ["Full-history", "Robust (percentile-clipped)"],
+    index=0,
+    help=(
+        "Full-history: simple min/max scaling over entire history. "
+        "Robust: uses 5th–95th percentiles to reduce the impact of outliers."
+    ),
+)
+SCALING_KEY = "full" if scaling_mode_label.startswith("Full") else "robust"
+
+st.sidebar.markdown(
+    "v0.5 – Macro Capital Flows Dashboard. "
+    "Run the pipelines or scheduled job to refresh data."
 )
 
 
@@ -69,6 +106,21 @@ def _get_date_column(df: pd.DataFrame) -> str:
 
 
 # ---------------------------------------------------------
+# Cached helpers
+# ---------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def get_macro_scores(scaling_mode: str = "full") -> pd.DataFrame:
+    """Cached wrapper around compute_macro_risk_score with scaling_mode."""
+    return compute_macro_risk_score(scaling_mode=scaling_mode).sort_index()
+
+
+@st.cache_data(show_spinner=False)
+def get_price_history(tickers, start, end):
+    """Cached yfinance download for Historical Accuracy panel."""
+    return yf.download(tickers, start=start, end=end, auto_adjust=True)
+
+
+# ---------------------------------------------------------
 # 1. Macro Risk Score (top-level summary)
 # ---------------------------------------------------------
 st.subheader("Macro Risk Score")
@@ -79,7 +131,7 @@ st.caption(
 )
 
 try:
-    macro_df = compute_macro_risk_score().sort_index()
+    macro_df = get_macro_scores(SCALING_KEY)
     latest = macro_df.iloc[-1]
     latest_score = float(latest["macro_score"])
 
@@ -114,6 +166,56 @@ try:
             st.markdown("🔴 **Risk-Off Environment** — flows into USD, Treasuries, defensives")
         else:
             st.markdown("🟡 **Mixed Environment** — barbell of quality + duration")
+
+        st.caption(
+            f"Scaling mode: **{scaling_mode_label}** — component scores are transformed to 0–100 using "
+            "either raw min/max or percentile-clipped ranges."
+        )
+
+    # Component attribution snapshot
+    st.subheader("Component Score Snapshot")
+
+    comp_cols = [c for c in macro_df.columns if c.endswith("_score") and c != "macro_score"]
+    latest_components = latest[comp_cols].dropna()
+
+    if not latest_components.empty:
+        label_map = {
+            "fed_liquidity_score": "Fed Liquidity",
+            "curve_score": "Yield Curve",
+            "credit_score": "Credit",
+            "fx_score": "FX Liquidity",
+            "funding_score": "Funding Stress",
+            "volatility_score": "Volatility",
+            "growth_leading_score": "Leading Growth",
+        }
+        display_names = [label_map.get(c, c) for c in latest_components.index]
+
+        fig_attr = go.Figure(
+            go.Bar(
+                x=latest_components.values,
+                y=display_names,
+                orientation="h",
+            )
+        )
+        fig_attr.update_layout(
+            xaxis=dict(range=[0, 100], title="Score (0–100)"),
+            margin=dict(l=120, r=40, t=30, b=40),
+            height=300,
+        )
+        st.plotly_chart(fig_attr, use_container_width=True)
+
+        # Simple narrative based on which components are strongest/weakest
+        strongest = latest_components.idxmax()
+        weakest = latest_components.idxmin()
+        strong_label = label_map.get(strongest, strongest)
+        weak_label = label_map.get(weakest, weakest)
+
+        st.markdown(
+            f"**Attribution:** The strongest pillar right now is **{strong_label}**, "
+            f"while **{weak_label}** is the main drag on the macro score."
+        )
+    else:
+        st.info("Component scores missing or NaN for the latest date — check pipelines/data.")
 
     # === Macro Risk Score History ===
     st.subheader("Macro Risk Score History")
@@ -183,32 +285,6 @@ except Exception as e:
     st.warning(f"Macro score section failed: {e}")
 
 st.markdown("---")  # THIS MUST BE OUTSIDE try/except!
-
-
-# ---------------------------------------------------------
-# Sidebar navigation
-# ---------------------------------------------------------
-st.sidebar.header("Select Dashboard Section")
-
-section = st.sidebar.radio(
-    "Section",
-    [
-        "Fed Liquidity & Plumbing",
-        "Yield Curve & Policy",
-        "Credit Market Signals",
-        "FX & Global Stress",
-        "Growth & Inflation",
-        "Leading Growth Signals",
-        "Volatility & Market Stress",
-        "Model Diagnostics",
-        "Historical Accuracy",
-    ],
-)
-
-st.sidebar.markdown(
-    "v0.4 – Macro Capital Flows Dashboard. "
-    "Run the pipelines or scheduled job to refresh data."
-)
 
 
 # ---------------------------------------------------------
@@ -593,6 +669,80 @@ elif section == "Growth & Inflation":
         st.info("PCE_YoY column missing in macro_core.csv")
 
 
+elif section == "Gold / Silver Ratio":
+    st.header("Gold / Silver Ratio")
+    st.caption(
+        "The gold to silver ratio compares the price of gold to silver using GLD and SLV ETFs. "
+        "When the ratio is rising, gold is outperforming silver, often consistent with risk-off, "
+        "deflationary, or crisis environments. When the ratio is falling, silver is outperforming "
+        "gold, which tends to align with reflationary or risk-on phases where industrial demand is stronger. "
+        "Both GLD and SLV prices are updated on each trading day."
+    )
+
+    try:
+        gsr = load_processed_csv("gold_silver_ratio.csv")
+    except FileNotFoundError as e:
+        st.error(str(e))
+        st.stop()
+
+    date_col = _get_date_column(gsr)
+    gsr[date_col] = pd.to_datetime(gsr[date_col])
+
+    # Main ratio chart
+    if "Gold_Silver_Ratio" in gsr.columns:
+        st.subheader("Gold / Silver Ratio (GLD / SLV)")
+        fig_ratio = single_line_plot(
+            gsr,
+            x=date_col,
+            y="Gold_Silver_Ratio",
+            title="Gold / Silver Ratio",
+            y_label="Ratio (GLD / SLV)",
+        )
+        st.plotly_chart(fig_ratio, use_container_width=True)
+    else:
+        st.info("Gold_Silver_Ratio column missing in gold_silver_ratio.csv")
+
+    # Optional: show GLD vs SLV themselves
+    col1, col2 = st.columns(2)
+
+    if "Gold" in gsr.columns:
+        with col1:
+            fig_gld = single_line_plot(
+                gsr,
+                x=date_col,
+                y="Gold",
+                title="GLD Price",
+                y_label="Price (USD)",
+            )
+            st.plotly_chart(fig_gld, use_container_width=True)
+    else:
+        with col1:
+            st.info("GLD column missing in gold_silver_ratio.csv")
+
+    if "Silver" in gsr.columns:
+        with col2:
+            fig_slv = single_line_plot(
+                gsr,
+                x=date_col,
+                y="Silver",
+                title="SLV Price",
+                y_label="Price (USD)",
+            )
+            st.plotly_chart(fig_slv, use_container_width=True)
+    else:
+        with col2:
+            st.info("SLV column missing in gold_silver_ratio.csv")
+
+    # Quick narrative
+    latest_row = gsr.dropna(subset=["Gold_Silver_Ratio"]).iloc[-1]
+    latest_ratio = float(latest_row["Gold_Silver_Ratio"])
+    st.markdown(f"**Latest Gold / Silver ratio:** `{latest_ratio:.1f}`")
+
+    st.caption(
+        "Historically, very elevated ratios often coincide with stress or deflationary scares when investors crowd "
+        "into gold relative to silver. Depressed ratios usually happen in strong reflationary or commodity bull phases."
+    )
+
 # ---------------------------------------------------------
 # 7. Leading Growth Signals
 # ---------------------------------------------------------
@@ -747,7 +897,7 @@ elif section == "Model Diagnostics":
     )
 
     try:
-        scores = compute_macro_risk_score().sort_index()
+        scores = get_macro_scores(SCALING_KEY)
     except Exception as e:
         st.error(f"Failed to compute macro scores for diagnostics: {e}")
         st.stop()
@@ -853,11 +1003,12 @@ elif section == "Historical Accuracy":
     st.header("Historical Accuracy")
     st.caption(
         "How well did each macro regime historically predict asset performance? "
-        "Forward returns are computed over each historical regime condition."
+        "Forward returns are computed over each historical regime condition. "
+        "Regimes are based on a smoothed macro score and quantile thresholds to avoid overfitting."
     )
 
     try:
-        scores = compute_macro_risk_score().sort_index()
+        scores = get_macro_scores(SCALING_KEY)
     except Exception as e:
         st.error(f"Failed to compute macro scores for accuracy panel: {e}")
         st.stop()
@@ -871,15 +1022,34 @@ elif section == "Historical Accuracy":
         st.info("Macro score history empty — cannot compute historical accuracy.")
         st.stop()
 
-    def classify_regime(x: float) -> str:
-        if x >= 60:
+    # Smooth macro score to avoid noisy regime flips
+    scores["macro_score_ma"] = scores["macro_score"].rolling(window=10, min_periods=5).mean()
+
+    valid = scores["macro_score_ma"].dropna()
+    if valid.empty:
+        st.info("Not enough non-NaN macro scores to classify regimes.")
+        st.stop()
+
+    q_low = valid.quantile(0.33)
+    q_high = valid.quantile(0.67)
+
+    def classify_regime_from_row(row) -> str | None:
+        v = row["macro_score_ma"]
+        if pd.isna(v):
+            return None
+        if v >= q_high:
             return "Risk-On"
-        elif x <= 40:
+        elif v <= q_low:
             return "Risk-Off"
         else:
             return "Mixed"
 
-    scores["Regime"] = scores["macro_score"].apply(classify_regime)
+    scores["Regime"] = scores.apply(classify_regime_from_row, axis=1)
+    scores = scores.dropna(subset=["Regime"])
+
+    if scores.empty:
+        st.info("No dates could be classified into regimes after smoothing and quantiles.")
+        st.stop()
 
     tickers = {
         "SPY": "US Equities",
@@ -888,6 +1058,8 @@ elif section == "Historical Accuracy":
         "UUP": "US Dollar",
         "HYG": "High Yield Credit",
         "EEM": "Emerging Markets",
+        "BTC-USD": "Bitcoin",
+        "SLV": "Silver",
     }
 
     st.markdown("### Assets to Evaluate")
@@ -897,7 +1069,10 @@ elif section == "Historical Accuracy":
         default=["SPY", "TLT", "GLD", "UUP"],
     )
 
-    look_aheads = [30, 90, 180]
+    # Use business-day horizons (~1M, 3M, 6M) instead of calendar days
+    look_aheads = [21, 63, 126]
+    horizon_labels = {21: "1M (21bd)", 63: "3M (63bd)", 126: "6M (126bd)"}
+
     start = scores.index.min()
     end = scores.index.max()
 
@@ -905,8 +1080,7 @@ elif section == "Historical Accuracy":
         st.info("Select at least one asset to evaluate.")
         st.stop()
 
-    # Robust yfinance handling
-    raw = yf.download(selected, start=start, end=end, auto_adjust=True)
+    raw = get_price_history(selected, start=start, end=end)
 
     if raw.empty:
         st.info("No price data returned from yfinance for the selected assets and date range.")
@@ -983,12 +1157,16 @@ elif section == "Historical Accuracy":
         mask = scores["Regime"] == regime
         dates = scores.index[mask]
 
+        if len(dates) == 0:
+            continue
+
         for ticker in selected:
             for days in look_aheads:
                 fwd = []
                 dd = []
+
                 for d in dates:
-                    end_date = d + pd.Timedelta(days=days)
+                    end_date = d + BDay(days)
                     if end_date not in data.index:
                         continue
                     start_px = data.loc[d, ticker]
@@ -1008,14 +1186,24 @@ elif section == "Historical Accuracy":
                 if not fwd:
                     continue
 
+                avg_ret = float(np.mean(fwd))
+                win_rate = float(100 * (np.sum(np.array(fwd) > 0) / len(fwd)))
+                avg_dd = float(np.mean(dd)) if dd else np.nan
+
+                # Simple risk-adjusted metric (not annualized, just horizon-based Sharpe-style)
+                std_ret = float(np.std(fwd, ddof=1)) if len(fwd) > 1 else np.nan
+                sharpe_like = avg_ret / std_ret if std_ret and std_ret != 0 else np.nan
+
                 results.append(
                     {
                         "Regime": regime,
                         "Asset": ticker,
-                        "Forward": f"{days}d",
-                        "Avg Return %": float(np.mean(fwd)),
-                        "Win Rate %": float(100 * (np.sum(np.array(fwd) > 0) / len(fwd))),
-                        "Avg Max Drawdown %": float(np.mean(dd)) if dd else np.nan,
+                        "Forward": horizon_labels[days],
+                        "Avg Return %": avg_ret,
+                        "Win Rate %": win_rate,
+                        "Avg Max Drawdown %": avg_dd,
+                        "Sharpe-like": sharpe_like,
+                        "Samples": len(fwd),
                     }
                 )
 
@@ -1028,7 +1216,7 @@ elif section == "Historical Accuracy":
     st.markdown("### Summary Table")
     pivot = (
         res_df.pivot(index=["Regime", "Asset"], columns="Forward")[
-            ["Avg Return %", "Win Rate %", "Avg Max Drawdown %"]
+            ["Avg Return %", "Win Rate %", "Avg Max Drawdown %", "Sharpe-like", "Samples"]
         ]
         .round(2)
         .sort_index()
@@ -1045,5 +1233,6 @@ elif section == "Historical Accuracy":
         st.write(
             f"**{regime}:** "
             f"Best = {best['Asset']} ({best['Avg Return %']:+.2f}% over {best['Forward']}) — "
-            f"Worst = {worst['Asset']} ({worst['Avg Return %']:+.2f}% over {worst['Forward']})"
+            f"Worst = {worst['Asset']} ({worst['Avg Return %']:+.2f}% over {worst['Forward']}) "
+            f"(Samples used: {int(best['Samples'])} / {int(worst['Samples'])})"
         )

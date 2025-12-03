@@ -1,5 +1,3 @@
-# utils/risk_score.py
-
 import os
 from pathlib import Path
 from typing import Dict
@@ -54,10 +52,62 @@ def _scale_to_0_100(series: pd.Series) -> pd.Series:
     return out
 
 
+def _scale_to_0_100_robust(
+    series: pd.Series,
+    lower_q: float = 0.05,
+    upper_q: float = 0.95,
+) -> pd.Series:
+    """
+    Robust 0–100 scaling using clipped percentiles instead of raw min/max.
+
+    Values below the lower_q percentile are treated as the min,
+    values above the upper_q percentile are treated as the max.
+    If the two percentiles coincide, returns 50 for all non-NaN entries.
+    """
+    s = series.copy()
+    s = s.replace([np.inf, -np.inf], np.nan)
+
+    if s.dropna().empty:
+        return pd.Series(np.nan, index=s.index)
+
+    q_low = s.quantile(lower_q)
+    q_high = s.quantile(upper_q)
+
+    if pd.isna(q_low) or pd.isna(q_high):
+        return pd.Series(np.nan, index=s.index)
+
+    if q_high == q_low:
+        return pd.Series(50.0, index=s.index)
+
+    clipped = s.clip(lower=q_low, upper=q_high)
+    out = (clipped - q_low) / (q_high - q_low) * 100.0
+    return out
+
+
+def _apply_scaling(
+    series: pd.Series,
+    mode: str = "full",
+    lower_q: float = 0.05,
+    upper_q: float = 0.95,
+) -> pd.Series:
+    """
+    Helper to apply either full-history or robust percentile-based scaling.
+    mode: "full" or "robust"
+    """
+    mode = (mode or "full").lower()
+    if mode == "robust":
+        return _scale_to_0_100_robust(series, lower_q=lower_q, upper_q=upper_q)
+    return _scale_to_0_100(series)
+
+
 # ---------------------------------------------------------
 # Fed Liquidity Score
 # ---------------------------------------------------------
-def _compute_fed_liquidity_score() -> pd.Series:
+def _compute_fed_liquidity_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.Series:
     """
     Fed liquidity composite:
     + Fed balance sheet
@@ -74,24 +124,28 @@ def _compute_fed_liquidity_score() -> pd.Series:
 
     components = []
 
-    if fed is not None:
+    if fed is not None and fed.std() > 0:
         components.append((fed - fed.mean()) / fed.std())
-    if tga is not None:
+    if tga is not None and tga.std() > 0:
         components.append(-(tga - tga.mean()) / tga.std())
-    if rrp is not None:
+    if rrp is not None and rrp.std() > 0:
         components.append(-(rrp - rrp.mean()) / rrp.std())
 
     if not components:
         return pd.Series(np.nan, index=df.index)
 
     composite = sum(components) / len(components)
-    return _scale_to_0_100(composite)
+    return _apply_scaling(composite, mode=scaling_mode, lower_q=robust_lower, upper_q=robust_upper)
 
 
 # ---------------------------------------------------------
 # Yield Curve Score
 # ---------------------------------------------------------
-def _compute_yield_curve_score() -> pd.Series:
+def _compute_yield_curve_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.Series:
     """
     Yield curve composite:
     + 2s10s spread
@@ -113,13 +167,17 @@ def _compute_yield_curve_score() -> pd.Series:
         return pd.Series(np.nan, index=df.index)
 
     avg_spread = sum(spreads) / len(spreads)
-    return _scale_to_0_100(avg_spread)
+    return _apply_scaling(avg_spread, mode=scaling_mode, lower_q=robust_lower, upper_q=robust_upper)
 
 
 # ---------------------------------------------------------
 # Credit Stress Score
 # ---------------------------------------------------------
-def _compute_credit_score() -> pd.Series:
+def _compute_credit_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.Series:
     """
     Credit score based on IG and HY OAS.
 
@@ -143,13 +201,17 @@ def _compute_credit_score() -> pd.Series:
         components.append(-ig)
 
     composite = sum(components) / len(components)
-    return _scale_to_0_100(composite)
+    return _apply_scaling(composite, mode=scaling_mode, lower_q=robust_lower, upper_q=robust_upper)
 
 
 # ---------------------------------------------------------
 # FX Liquidity Score
 # ---------------------------------------------------------
-def _compute_fx_score() -> pd.Series:
+def _compute_fx_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.Series:
     """
     FX liquidity score using DXY and an EM FX basket.
 
@@ -182,13 +244,17 @@ def _compute_fx_score() -> pd.Series:
         return pd.Series(np.nan, index=df.index)
 
     composite = sum(components) / len(components)
-    return _scale_to_0_100(composite)
+    return _apply_scaling(composite, mode=scaling_mode, lower_q=robust_lower, upper_q=robust_upper)
 
 
 # ---------------------------------------------------------
 # Funding Stress Score
 # ---------------------------------------------------------
-def _compute_funding_score() -> pd.Series:
+def _compute_funding_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.Series:
     """
     Funding stress based on EFFR-SOFR and EFFR-OBFR spreads.
 
@@ -210,13 +276,17 @@ def _compute_funding_score() -> pd.Series:
         components.append(-effr_obfr)
 
     composite = sum(components) / len(components)
-    return _scale_to_0_100(composite)
+    return _apply_scaling(composite, mode=scaling_mode, lower_q=robust_lower, upper_q=robust_upper)
 
 
 # ---------------------------------------------------------
 # Volatility Score (VIX + term structure + MOVE)
 # ---------------------------------------------------------
-def _compute_volatility_score() -> pd.Series:
+def _compute_volatility_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.Series:
     """
     Convert VIX level + term structure + MOVE Index into a 0–100 'volatility regime' score.
 
@@ -254,17 +324,25 @@ def _compute_volatility_score() -> pd.Series:
         return pd.Series(np.nan, index=df.index)
 
     composite = sum(components) / len(components)
-    return _scale_to_0_100(composite)
+    return _apply_scaling(composite, mode=scaling_mode, lower_q=robust_lower, upper_q=robust_upper)
 
 
 # ---------------------------------------------------------
 # Leading Growth Score (orders/inventories + claims)
 # ---------------------------------------------------------
-def _compute_growth_leading_score() -> pd.Series:
+def _compute_growth_leading_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.Series:
     """
     Leading growth score based on:
       + Orders_YoY – Inventories_YoY (proxy for ISM New Orders - Inventories)
       - Initial Unemployment Claims (4-week MA)
+
+    To reduce look-ahead bias, we use a 1-period lag for each series
+    so that the score only uses information that would have been available
+    at or before the observation date.
 
     Strong orders growth vs inventories and low / stable claims => risk-on.
     Collapsing spread and rising claims => risk-off.
@@ -273,6 +351,12 @@ def _compute_growth_leading_score() -> pd.Series:
 
     ism_spread = df.get("ISM_Spread")
     claims = df.get("Initial_Claims_4WMA", df.get("Initial_Claims"))
+
+    # Apply a one-period lag to approximate "known at time t"
+    if ism_spread is not None:
+        ism_spread = ism_spread.shift(1)
+    if claims is not None:
+        claims = claims.shift(1)
 
     if ism_spread is None and claims is None:
         return pd.Series(np.nan, index=df.index)
@@ -291,15 +375,23 @@ def _compute_growth_leading_score() -> pd.Series:
         return pd.Series(np.nan, index=df.index)
 
     composite = sum(components) / len(components)
-    return _scale_to_0_100(composite)
+    return _apply_scaling(composite, mode=scaling_mode, lower_q=robust_lower, upper_q=robust_upper)
 
 
 # ---------------------------------------------------------
 # Macro Risk Score (main entry point)
 # ---------------------------------------------------------
-def compute_macro_risk_score() -> pd.DataFrame:
+def compute_macro_risk_score(
+    scaling_mode: str = "full",
+    robust_lower: float = 0.05,
+    robust_upper: float = 0.95,
+) -> pd.DataFrame:
     """
     Compute component scores and overall macro risk score.
+
+    scaling_mode:
+      - "full"   : simple min/max scaling (historical extremes)
+      - "robust" : percentile-clipped scaling (less sensitive to outliers)
 
     Returns a DataFrame with columns:
       - fed_liquidity_score
@@ -311,13 +403,13 @@ def compute_macro_risk_score() -> pd.DataFrame:
       - growth_leading_score
       - macro_score
     """
-    fed_liq = _compute_fed_liquidity_score()
-    curve = _compute_yield_curve_score()
-    credit = _compute_credit_score()
-    fx = _compute_fx_score()
-    funding = _compute_funding_score()
-    vol = _compute_volatility_score()
-    growth_leading = _compute_growth_leading_score()
+    fed_liq = _compute_fed_liquidity_score(scaling_mode, robust_lower, robust_upper)
+    curve = _compute_yield_curve_score(scaling_mode, robust_lower, robust_upper)
+    credit = _compute_credit_score(scaling_mode, robust_lower, robust_upper)
+    fx = _compute_fx_score(scaling_mode, robust_lower, robust_upper)
+    funding = _compute_funding_score(scaling_mode, robust_lower, robust_upper)
+    vol = _compute_volatility_score(scaling_mode, robust_lower, robust_upper)
+    growth_leading = _compute_growth_leading_score(scaling_mode, robust_lower, robust_upper)
 
     # Common index
     all_index = fed_liq.index.union(curve.index)
