@@ -351,6 +351,64 @@ if section == "Fed Liquidity & Plumbing":
     else:
         st.info("RRP_Usage column missing in fed_liquidity.csv")
 
+            # --- Net Liquidity level and flows ---
+    if "Net_Liquidity" in df_plot.columns:
+        st.subheader("Net Liquidity (Fed – TGA – RRP)")
+        st.caption(
+            "Net liquidity is approximated as the Fed balance sheet minus the Treasury General Account "
+            "and Reverse Repo usage. Rising levels mean more dollars circulating in the system; falling levels "
+            "mean liquidity is being drained."
+        )
+
+        fig_net = single_line_plot(
+            df_plot,
+            x=date_col,
+            y="Net_Liquidity",
+            title="Net Liquidity Level",
+            y_label="USD B",
+        )
+        st.plotly_chart(fig_net, use_container_width=True)
+    else:
+        st.info("Net_Liquidity column missing in fed_liquidity.csv – rerun fed_plumbing pipeline.")
+
+    if "Net_Liq_Change_1d" in df_plot.columns:
+        st.subheader("Liquidity Flows (Daily Net Change)")
+        st.caption(
+            "Daily change in net liquidity shows how many billions of dollars are being added to or drained "
+            "from the system each day. Positive bars indicate injections; negative bars indicate drains."
+        )
+
+        flows = df_plot[[date_col, "Net_Liq_Change_1d"]].dropna().copy()
+        flows.set_index(date_col, inplace=True)
+
+        fig_flow = go.Figure()
+        fig_flow.add_trace(
+            go.Bar(
+                x=flows.index,
+                y=flows["Net_Liq_Change_1d"],
+                name="Daily Δ Net Liquidity",
+            )
+        )
+        fig_flow.update_layout(
+            title="Daily Change in Net Liquidity",
+            xaxis_title="Date",
+            yaxis_title="Change (USD B)",
+            height=300,
+            margin=dict(l=40, r=40, t=40, b=40),
+        )
+        st.plotly_chart(fig_flow, use_container_width=True)
+
+        # Quick 60-day summary
+        window_days = 60
+        recent = flows.iloc[-window_days:]
+        total_flow = recent["Net_Liq_Change_1d"].sum()
+        st.markdown(
+            f"Over the last **{window_days} trading days**, net liquidity has moved by "
+            f"**{total_flow:,.1f}** (positive = net injection, negative = net drain)."
+        )
+    else:
+        st.info("Net_Liq_Change_1d column missing in fed_liquidity.csv – rerun fed_plumbing pipeline.")
+
     st.markdown("---")
 
     st.subheader("Funding Stress: EFFR vs SOFR or OBFR")
