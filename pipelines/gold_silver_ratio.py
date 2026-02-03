@@ -85,19 +85,6 @@ def fetch_gold_silver_ratio(start: str = "2005-01-01") -> pd.DataFrame:
     return out
 
 
-def main() -> None:
-    df = fetch_gold_silver_ratio()
-
-    out_dir = PROJECT_ROOT / "data" / "processed"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    out_path = out_dir / "gold_silver_ratio.csv"
-    df.to_csv(out_path)
-    print(f"✔ Gold/Silver ratio data saved to: {out_path}")
-
-
-
-
 if __name__ == "__main__":
     data = fetch_gold_silver_ratio()
 

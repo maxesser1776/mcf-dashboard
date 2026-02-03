@@ -730,11 +730,11 @@ elif section == "Growth & Inflation":
 elif section == "Gold / Silver Ratio":
     st.header("Gold / Silver Ratio")
     st.caption(
-        "The gold to silver ratio compares the price of gold to silver using GLD and SLV ETFs. "
+        "The gold to silver ratio compares the price of gold to silver using COMEX futures (GC=F, SI=F). "
         "When the ratio is rising, gold is outperforming silver, often consistent with risk-off, "
         "deflationary, or crisis environments. When the ratio is falling, silver is outperforming "
         "gold, which tends to align with reflationary or risk-on phases where industrial demand is stronger. "
-        "Both GLD and SLV prices are updated on each trading day."
+        "Futures prices are updated each trading day."
     )
 
     try:
@@ -792,9 +792,16 @@ elif section == "Gold / Silver Ratio":
             st.info("SLV column missing in gold_silver_ratio.csv")
 
     # Quick narrative
-    latest_row = gsr.dropna(subset=["Gold_Silver_Ratio"]).iloc[-1]
-    latest_ratio = float(latest_row["Gold_Silver_Ratio"])
-    st.markdown(f"**Latest Gold / Silver ratio:** `{latest_ratio:.1f}`")
+    if "Gold_Silver_Ratio" in gsr.columns:
+        latest_valid = gsr.dropna(subset=["Gold_Silver_Ratio"])
+        if not latest_valid.empty:
+            latest_row = latest_valid.iloc[-1]
+            latest_ratio = float(latest_row["Gold_Silver_Ratio"])
+            st.markdown(f"**Latest Gold / Silver ratio:** `{latest_ratio:.1f}`")
+        else:
+            st.info("Gold_Silver_Ratio has no non-null values to summarize.")
+    else:
+        st.info("Gold_Silver_Ratio column missing in gold_silver_ratio.csv")
 
     st.caption(
         "Historically, very elevated ratios often coincide with stress or deflationary scares when investors crowd "

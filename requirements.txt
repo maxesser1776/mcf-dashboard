@@ -3,7 +3,7 @@ fiscaldataapi
 yfinance
 requests
 pandas
-streamlit
+streamlit>=1.31
 plotly
-dotenv 
+python-dotenv
 numpy

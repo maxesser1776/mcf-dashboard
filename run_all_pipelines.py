@@ -15,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PYTHON = sys.executable  # whatever python is running this script
 
 PIPELINE_SCRIPTS = [
+    "pipelines/gold_silver_ratio.py",
     "pipelines/fed_plumbing.py",
     "pipelines/yield_curve.py",
     "pipelines/credit_spreads.py",

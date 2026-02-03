@@ -9,6 +9,7 @@ __pycache__/
 
 # Streamlit config
 .streamlit/
+logs/
 
 # Sensitive files
 .env
